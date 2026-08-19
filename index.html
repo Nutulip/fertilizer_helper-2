@@ -1,0 +1,1641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fertilizer Helper (温室营养液决策助手)</title>
+<!-- Tailwind: local copy first so the page works where cdn.tailwindcss.com is
+     slow or unreachable. Falls back to the CDN if vendor/tailwind.js is absent.
+     To vendor it:  curl -L https://cdn.tailwindcss.com -o vendor/tailwind.js -->
+<script src="./vendor/tailwind.js"></script>
+<script>window.tailwind || document.write('<script src="https://cdn.tailwindcss.com"><\/script>');</script>
+<script>
+tailwind.config = {
+  theme: { extend: {
+    colors: { brand: { 50:'#eff6ff',100:'#dbeafe',600:'#1d4ed8',700:'#1e40af',900:'#172554' } },
+    fontFamily: { sans: ['Inter','Segoe UI','Microsoft YaHei','PingFang SC','system-ui','sans-serif'] }
+  } }
+};
+</script>
+<style>
+  html { scroll-behavior: smooth; }
+  body { -webkit-font-smoothing: antialiased; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  .field-bad { border-color:#dc2626 !important; background:#fef2f2; }
+  @keyframes pulseRed { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.45)} 50%{box-shadow:0 0 0 12px rgba(220,38,38,0)} }
+  .alarm { animation: pulseRed 1.8s ease-out infinite; }
+  @media print { .no-print { display:none !important; } }
+</style>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-800 font-sans">
+
+<!-- ══════════════════ HEADER ══════════════════ -->
+<header class="bg-brand-900 text-white shadow-lg">
+  <div class="max-w-7xl mx-auto px-4 py-4 sm:py-5">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div class="min-w-0">
+        <h1 class="text-xl sm:text-2xl font-bold tracking-tight">
+          Fertilizer Helper <span class="text-blue-200">(温室营养液决策助手)</span>
+        </h1>
+        <p class="mt-1 text-xs sm:text-sm text-blue-200">
+          Nutrient Solution Calculator for Protected Horticulture (设施园艺营养液精算系统)
+        </p>
+        <p class="mt-1 text-[11px] text-blue-300/80">
+          Based on WUR / Nutrient Solutions for Greenhouse Crops 2020 v4
+          (依据 WUR《温室作物营养液》2020 第 4 版)
+        </p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0 no-print">
+        <div class="hidden sm:flex items-center gap-2 bg-brand-700/50 rounded-lg px-3 py-1.5">
+          <span id="connDot" class="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
+          <span id="connText" class="text-xs">Connecting… (连接中…)</span>
+        </div>
+        <button onclick="openModal('apiModal')"
+          class="text-xs bg-brand-700 hover:bg-brand-600 rounded-lg px-3 py-2 transition">
+          API Settings <span class="text-blue-200">(接口设置)</span>
+        </button>
+        <button onclick="openModal('legalModal')"
+          class="text-xs bg-amber-500 hover:bg-amber-400 text-amber-950 font-semibold rounded-lg px-3 py-2 transition">
+          Disclaimer <span class="opacity-80">(免责声明)</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════════ STATUS STRIP ══════════════════ -->
+<section class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 py-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+
+      <!-- pH card -->
+      <div id="phCard" class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3 transition-all">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Root Zone pH (根际 pH)
+          </span>
+          <span id="phBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">—</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-2">
+          <span id="phValue" class="text-3xl font-bold tabular-nums text-slate-400">–.–</span>
+          <span id="phLimit" class="text-[11px] text-slate-500">floor 5.2 (下限)</span>
+        </div>
+        <p id="phMsg" class="mt-0.5 text-[11px] text-slate-500 leading-snug">
+          Awaiting measurement (等待测定)
+        </p>
+      </div>
+
+      <!-- EC card -->
+      <div id="ecCard" class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3 transition-all">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Root Zone EC (根际电导率)
+          </span>
+          <span id="ecBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">—</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-2">
+          <span id="ecValue" class="text-3xl font-bold tabular-nums text-slate-400">–.–</span>
+          <span class="text-xs text-slate-500">mS/cm</span>
+          <span id="ecLimit" class="text-[11px] text-slate-500">ceiling 4.5 (上限)</span>
+        </div>
+        <p id="ecMsg" class="mt-0.5 text-[11px] text-slate-500 leading-snug">
+          Awaiting measurement (等待测定)
+        </p>
+      </div>
+
+      <!-- Crop card -->
+      <div class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          Active Crop (当前作物)
+        </span>
+        <div id="cropSummary" class="mt-1 text-sm font-semibold text-slate-700">
+          Not selected (未选择)
+        </div>
+        <p id="cropStage" class="mt-0.5 text-[11px] text-slate-500 leading-snug">
+          Stage: standard (阶段：标准)
+        </p>
+      </div>
+
+      <!-- Gate count card -->
+      <div class="rounded-xl border-2 border-slate-200 bg-slate-50 p-3">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          Active Alerts (当前警报)
+        </span>
+        <div class="mt-1 flex flex-wrap items-center gap-1.5">
+          <span id="cntBlocking" class="text-[11px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700">0 blocking (阻断)</span>
+          <span id="cntCritical" class="text-[11px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-700">0 critical (严重)</span>
+          <span id="cntWarning"  class="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-700">0 warning (警告)</span>
+        </div>
+        <p class="mt-0.5 text-[11px] text-slate-500 leading-snug">
+          Gates are issued by the engine (闸门由计算引擎发出)
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ TABS ══════════════════ -->
+<nav class="bg-white border-b border-slate-200 no-print">
+  <div class="max-w-7xl mx-auto px-2">
+    <div class="flex gap-1 overflow-x-auto no-scrollbar" id="tabBar"></div>
+  </div>
+</nav>
+
+<main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+<!-- ─────────── TAB 1: BASE WATER & ACID ─────────── -->
+<section data-panel="1" class="space-y-5">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-bold text-slate-800">
+      Base Water &amp; Acid Dosing <span class="text-brand-600">(原水水质与加酸计算)</span>
+    </h2>
+    <p class="mt-1 text-sm text-slate-500">
+      Classify the irrigation water, neutralise excess bicarbonate while retaining the pH buffer,
+      and credit the water's own nutrients against the recipe.
+      <span class="block text-slate-400">(评估灌溉水质，中和多余碳酸氢盐并保留 pH 缓冲，同时将原水养分抵扣入配方。)</span>
+    </p>
+
+    <div class="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div class="lg:col-span-1 space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              Base Water EC (原水电导率)</label>
+            <input id="bwEC" type="number" step="0.01" min="0" max="10" value="0.65"
+              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+            <p class="mt-0.5 text-[10px] text-slate-400">mS/cm</p>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              Base Water pH (原水 pH)</label>
+            <input id="bwPH" type="number" step="0.1" min="0" max="14" value="7.4"
+              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              Irrigation Type (灌溉方式)</label>
+            <select id="bwIrrig" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="DRIP">Drip (滴灌)</option>
+              <option value="SPRINKLER">Sprinkler (喷灌)</option>
+              <option value="NFT">NFT (营养液膜)</option>
+              <option value="EBB_FLOW">Ebb &amp; Flow (潮汐式)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              HCO₃ Buffer (碳酸氢盐缓冲)</label>
+            <select id="bwBuffer" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+              <option value="0.5">0.50 mmol/L</option>
+              <option value="0.6">0.60 mmol/L</option>
+              <option value="0.75">0.75 mmol/L</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="space-y-2 pt-1">
+          <label class="flex items-center gap-2 text-xs text-slate-600">
+            <input id="bwRecirc" type="checkbox" class="rounded border-slate-300 text-brand-600 focus:ring-brand-600">
+            Recirculating system (循环回用系统)
+          </label>
+          <label class="flex items-center gap-2 text-xs text-slate-600">
+            <input id="bwOrganic" type="checkbox" class="rounded border-slate-300 text-brand-600 focus:ring-brand-600">
+            Organic matter present in water (水中含有机质)
+          </label>
+        </div>
+
+        <button onclick="runModule1()"
+          class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+          Calculate Acid Dosing (计算加酸量)
+        </button>
+      </div>
+
+      <div class="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-5">
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            Macronutrients (大量元素) — mmol/L</h3>
+          <div id="bwMacro" class="grid grid-cols-2 gap-2"></div>
+        </div>
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            Micronutrients (微量元素) — µmol/L</h3>
+          <div id="bwMicro" class="grid grid-cols-2 gap-2"></div>
+          <p class="mt-2 text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded-lg p-2 leading-snug">
+            Iron in the base water is never credited as nutrient — it precipitates at the emitter.
+            <span class="block text-slate-400">(原水中的铁不计入养分供给 — 它在滴头处即沉淀。)</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="out1"></div>
+</section>
+
+<!-- ─────────── TAB 2: CROP & STAGE ─────────── -->
+<section data-panel="2" class="hidden space-y-5">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-bold text-slate-800">
+      Crop &amp; Stage Selector <span class="text-brand-600">(作物物候与目标配方)</span>
+    </h2>
+    <p class="mt-1 text-sm text-slate-500">
+      Stage adjustments are read from the crop library, never hardcoded — tomato and cucumber differ at fruit set.
+      <span class="block text-slate-400">(生育阶段调整量取自作物数据库，绝不写死 — 番茄与黄瓜的坐果期调整并不相同。)</span>
+    </p>
+
+    <div class="mt-5 grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">Crop (作物)</label>
+        <select id="cropSelect" onchange="onCropChange()"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"></select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Dry-back Intent (回干策略)</label>
+        <select id="dryBack" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+          <option value="STRONGLY_VEGETATIVE">Strongly vegetative (强营养生长) 6–8%</option>
+          <option value="BALANCED" selected>Balanced (平衡) 8–12%</option>
+          <option value="GENERATIVE">Generative (生殖生长) 12–15%</option>
+          <option value="STRONGLY_GENERATIVE">Strongly generative (强生殖生长) 15–20%</option>
+        </select>
+      </div>
+      <div class="lg:col-span-2">
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Growth Stages (生育阶段) — stackable (可叠加)</label>
+        <div id="stageBoxes" class="flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+
+    <button onclick="runModule5()"
+      class="mt-4 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+      Apply Stage Adjustments (应用阶段调整)
+    </button>
+  </div>
+
+  <div id="cropDetail"></div>
+  <div id="out2"></div>
+</section>
+
+<!-- ─────────── TAB 3: MEASUREMENT & DIAGNOSTICS ─────────── -->
+<section data-panel="3" class="hidden space-y-5">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-bold text-slate-800">
+      Current Measurement &amp; Diagnostics <span class="text-brand-600">(当前根际测定与诊断)</span>
+    </h2>
+    <p class="mt-1 text-sm text-slate-500">
+      The emergency gate is evaluated first. If pH &lt; 5.2 or EC &gt; 4.5 mS/cm the recipe output is
+      suspended and a hardcoded flush instruction is returned.
+      <span class="block text-slate-400">(紧急闸门优先判定。若 pH &lt; 5.2 或 EC &gt; 4.5 mS/cm，配方输出将被暂停并返回固化的冲洗指令。)</span>
+    </p>
+
+    <div class="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div class="lg:col-span-1 space-y-4">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              Root Zone EC (根际电导率)</label>
+            <input id="rzEC" type="number" step="0.01" min="0" max="20" value="3.9"
+              oninput="liveStatus()"
+              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+            <p class="mt-0.5 text-[10px] text-slate-400">mS/cm</p>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">
+              Root Zone pH (根际 pH)</label>
+            <input id="rzPH" type="number" step="0.1" min="0" max="14" value="5.8"
+              oninput="liveStatus()"
+              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">
+            System Volume (系统液量) — L/m²</label>
+          <input id="sysVol" type="number" step="0.5" min="0" max="500" value="18"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+          <p class="mt-0.5 text-[10px] text-slate-400">
+            Required for the discharge volume (计算排液量所需)
+          </p>
+        </div>
+        <div class="flex flex-col gap-2">
+          <button onclick="runEmergency()"
+            class="w-full bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+            Check Emergency Gate (检查紧急闸门)
+          </button>
+          <button onclick="runModule4()"
+            class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+            Run Diagnostics (运行综合诊断)
+          </button>
+          <button onclick="runModule2()"
+            class="w-full bg-slate-700 hover:bg-slate-800 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+            Check Sodium Gate (检查钠离子闸门)
+          </button>
+        </div>
+      </div>
+
+      <div class="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-5">
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            Macronutrients (大量元素) — mmol/L</h3>
+          <div id="rzMacro" class="grid grid-cols-2 gap-2"></div>
+        </div>
+        <div>
+          <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            Micronutrients (微量元素) — µmol/L</h3>
+          <div id="rzMicro" class="grid grid-cols-2 gap-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="out3"></div>
+</section>
+
+<!-- ─────────── TAB 4: IRRIGATION & LEACHING ─────────── -->
+<section data-panel="4" class="hidden space-y-5">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-bold text-slate-800">
+      Irrigation &amp; Leaching Fraction <span class="text-brand-600">(排液比与灌溉管理)</span>
+    </h2>
+    <p class="mt-1 text-sm text-slate-500">
+      LF = (V_drain / V_irrigation) × 100%. A drain-dripper EC gap of 2.0 mS/cm or more triggers a wash cycle.
+      <span class="block text-slate-400">(排液比 =（排液量 / 灌溉量）× 100%。排液与滴灌电导差达到 2.0 mS/cm 即触发冲洗循环。)</span>
+    </p>
+    <div class="mt-3 inline-flex items-start gap-2 text-[11px] bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-3 py-2">
+      <span class="font-bold">⚠</span>
+      <span>Practice defaults — this module is not derived from the WUR manual.
+        <span class="text-amber-700">(实践经验默认值 — 本模块并非源自 WUR 手册。)</span></span>
+    </div>
+
+    <div class="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Irrigation Volume (灌溉量)</label>
+        <input id="lfIrrig" type="number" step="0.1" min="0.1" max="200" value="10"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+        <p class="mt-0.5 text-[10px] text-slate-400">L/m²/day</p>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Drain Volume (排液量)</label>
+        <input id="lfDrain" type="number" step="0.1" min="0" max="200" value="2.5"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+        <p class="mt-0.5 text-[10px] text-slate-400">L/m²/day</p>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Dripper EC (滴灌电导率)</label>
+        <input id="lfEcDrip" type="number" step="0.01" min="0" max="20" value="2.6"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+        <p class="mt-0.5 text-[10px] text-slate-400">mS/cm</p>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Drain EC (排液电导率)</label>
+        <input id="lfEcDrain" type="number" step="0.01" min="0" max="20" value="4.7"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+        <p class="mt-0.5 text-[10px] text-slate-400">mS/cm</p>
+      </div>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Drain Reuse Fraction (排液回用比例) — %</label>
+        <input id="lfReuse" type="number" step="1" min="0" max="100" value="20"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+        <p class="mt-0.5 text-[10px] text-slate-400">
+          Used for the drain deduction in the recipe (用于配方中的排液养分抵扣)
+        </p>
+      </div>
+      <div class="flex items-end">
+        <button onclick="runModule3()"
+          class="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition">
+          Calculate Leaching Fraction (计算排液比)
+        </button>
+      </div>
+    </div>
+
+    <div class="mt-5">
+      <h3 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+        Drain Water Composition (排液成分) — mmol/L, optional (可选)</h3>
+      <div id="drainMacro" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2"></div>
+    </div>
+  </div>
+  <div id="out4"></div>
+</section>
+
+<!-- ─────────── TAB 5: A/B STOCK TANKS ─────────── -->
+<section data-panel="5" class="hidden space-y-5">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h2 class="text-lg font-bold text-slate-800">
+      A/B Stock Tank Dosing Results
+      <span class="text-brand-600">(100 倍 A/B 母液罐配方结果)</span>
+    </h2>
+    <p class="mt-1 text-sm text-slate-500">
+      Runs the full pipeline using everything entered in tabs 1–4. All calcium fertilisers are separated
+      from phosphate and sulphate fertilisers; co-locating them is refused outright.
+      <span class="block text-slate-400">(使用标签页 1–4 中录入的全部数据运行完整流程。所有钙肥与磷酸盐、硫酸盐肥严格分罐；同罐存放将被直接拒绝。)</span>
+    </p>
+
+    <div class="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Tank Volume (罐容积) — L</label>
+        <input id="tankVol" type="number" step="50" min="50" max="20000" value="1000"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Concentration Factor (浓缩倍数)</label>
+        <input id="tankCF" type="number" step="10" min="1" max="400" value="100"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Boron Source (硼源)</label>
+        <select id="boronSrc" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+          <option value="borax">Borax (硼砂) — Na-bearing</option>
+          <option value="h3bo3">Boric acid (硼酸) — Na-free</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Disinfection (消毒方式)</label>
+        <select id="disinfect" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+          <option value="NONE">None (无)</option>
+          <option value="UV">UV (紫外)</option>
+          <option value="OZONE">Ozone (臭氧)</option>
+          <option value="H2O2">H₂O₂ (过氧化氢)</option>
+          <option value="HEAT">Heat (加热)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap gap-3">
+      <button onclick="runFullPipeline()"
+        class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg px-5 py-2.5 text-sm transition">
+        Run Full Pipeline (运行完整流程)
+      </button>
+      <button onclick="window.print()"
+        class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg px-5 py-2.5 text-sm transition no-print">
+        Print / Export (打印 / 导出)
+      </button>
+    </div>
+  </div>
+  <div id="out5"></div>
+</section>
+
+</main>
+
+<footer class="max-w-7xl mx-auto px-4 pb-10 pt-2 text-center text-[11px] text-slate-400">
+  Engine values are computed deterministically and are never generated by a language model.
+  <span class="block">(引擎数值均为确定性计算结果，绝非语言模型生成。)</span>
+</footer>
+
+<!-- ══════════════════ MODALS ══════════════════ -->
+<div id="legalModal" class="hidden fixed inset-0 z-50 bg-black/60 p-4 overflow-y-auto">
+  <div class="max-w-2xl mx-auto my-8 bg-white rounded-2xl shadow-2xl">
+    <div class="flex items-start justify-between p-5 border-b border-slate-200">
+      <h3 class="text-lg font-bold text-slate-800">
+        Legal Disclaimer <span class="text-brand-600">(法律免责声明)</span>
+      </h3>
+      <button onclick="closeModal('legalModal')"
+        class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-2">&times;</button>
+    </div>
+    <div class="p-5 space-y-4 text-sm text-slate-600 max-h-[60vh] overflow-y-auto">
+      <div class="bg-amber-50 border border-amber-300 rounded-lg p-3">
+        <p class="font-semibold text-amber-900">
+          This tool provides decision support only. It does not replace professional agronomic advice.
+        </p>
+        <p class="mt-1 text-amber-800">
+          本工具仅提供决策支持，不能替代专业农艺师的指导意见。
+        </p>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-700">Source &amp; attribution (来源与署名)</h4>
+        <p class="mt-1">
+          Calculations are derived from Van der Lugt, G., H.T. Holwerda, K. Hora, M. Bugter,
+          J. Hardeman &amp; P. de Vries (2020), <em>Nutrient Solutions for Greenhouse Crops</em>,
+          Version 4, ISBN 9789464021844, published by Eurofins Agro, Nouryon, SQM and Yara.
+          This application is not affiliated with, endorsed by, or produced by those organisations.
+        </p>
+        <p class="mt-1 text-slate-500">
+          计算依据上述手册第 4 版；本应用与该手册的出版方无任何隶属或背书关系。
+        </p>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-700">Publisher's disclaimer (出版方免责条款)</h4>
+        <p class="mt-1">
+          The source manual states that the conditions of use and application of its formulae and
+          recommendations are beyond the authors' control, that no warranty is made as to the accuracy
+          of any data contained therein, and that the partners disclaim any responsibility or liability
+          relating to their use.
+        </p>
+        <p class="mt-1 text-slate-500">
+          原手册声明：其公式与建议的使用条件超出作者控制范围，不对数据准确性作任何保证，
+          并对因使用而产生的任何责任予以免除。
+        </p>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-700">Threshold provenance (阈值来源)</h4>
+        <p class="mt-1">
+          Values badged <span class="font-mono text-xs bg-blue-100 text-blue-800 px-1 rounded">SRC:WUR</span>
+          come from the manual. Values badged
+          <span class="font-mono text-xs bg-amber-100 text-amber-800 px-1 rounded">SRC:PRACTICE</span>
+          are grower-practice defaults with no basis in the manual — leaching fraction, dry-back targets
+          and the emergency pH/EC thresholds fall in this category. Verify them against local conditions.
+        </p>
+        <p class="mt-1 text-slate-500">
+          标注 SRC:WUR 的数值源自手册；标注 SRC:PRACTICE 的为实践经验默认值，手册中并无依据
+          （排液比、回干目标与紧急 pH/EC 阈值均属此类），请结合当地条件核验。
+        </p>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-700">Safety (安全提示)</h4>
+        <p class="mt-1">
+          Concentrated acids and fertiliser stock solutions are hazardous. Follow the manufacturer's
+          safety data sheets and wear appropriate protective equipment. Never mix calcium fertilisers
+          with phosphate or sulphate fertilisers in the same tank.
+        </p>
+        <p class="mt-1 text-slate-500">
+          浓酸与母液具有危险性，请遵循厂商安全数据表并佩戴适当防护装备。
+          切勿将钙肥与磷酸盐或硫酸盐肥料置于同一母液罐中。
+        </p>
+      </div>
+    </div>
+    <div class="p-5 border-t border-slate-200 flex justify-end">
+      <button onclick="closeModal('legalModal')"
+        class="bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-5 py-2 text-sm">
+        I understand (我已知悉)
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="apiModal" class="hidden fixed inset-0 z-50 bg-black/60 p-4">
+  <div class="max-w-md mx-auto mt-24 bg-white rounded-2xl shadow-2xl">
+    <div class="flex items-start justify-between p-5 border-b border-slate-200">
+      <h3 class="text-lg font-bold text-slate-800">API Settings <span class="text-brand-600">(接口设置)</span></h3>
+      <button onclick="closeModal('apiModal')" class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-2">&times;</button>
+    </div>
+    <div class="p-5 space-y-3">
+      <label class="block text-xs font-semibold text-slate-600">
+        Backend Base URL (后端服务地址)</label>
+      <input id="apiUrl" type="text" value="http://127.0.0.1:8000"
+        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono">
+      <p class="text-[11px] text-slate-500">
+        When this page is served by the backend, leave it as the page's own address.
+        <span class="block text-slate-400">(当页面由后端提供时，保持为页面自身地址即可。)</span>
+      </p>
+      <div class="flex gap-2">
+        <button onclick="saveApi()"
+          class="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg px-4 py-2 text-sm">
+          Save &amp; Reconnect (保存并重新连接)
+        </button>
+        <button onclick="resetApi()"
+          class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg px-4 py-2 text-sm">
+          Reset (重置)
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ══════════════════ CONFIG & STATE ══════════════════ */
+
+/**
+ * When the page is served by the backend (the deployed case) the API lives on
+ * the same origin, so no configuration is needed. Only a page opened straight
+ * from disk needs to be told where the backend is.
+ *
+ * The saved override is keyed by origin: a localhost URL saved during local
+ * development must never leak into the deployed site and break it.
+ */
+const DEFAULT_API = (location.protocol === 'file:') ? 'http://127.0.0.1:8000' : location.origin;
+const API_KEY = 'fh_api::' + (location.origin || 'file');
+let API = localStorage.getItem(API_KEY) || DEFAULT_API;
+
+const MACRO = [
+  { k:'NH4',  en:'Ammonium N-NH₄',   zh:'铵态氮'     },
+  { k:'K',    en:'Potassium K',      zh:'钾'         },
+  { k:'Na',   en:'Sodium Na',        zh:'钠'         },
+  { k:'Ca',   en:'Calcium Ca',       zh:'钙'         },
+  { k:'Mg',   en:'Magnesium Mg',     zh:'镁'         },
+  { k:'NO3',  en:'Nitrate N-NO₃',    zh:'硝态氮'     },
+  { k:'Cl',   en:'Chloride Cl',      zh:'氯'         },
+  { k:'S',    en:'Sulphate S',       zh:'硫'         },
+  { k:'HCO3', en:'Bicarbonate HCO₃', zh:'碳酸氢盐'   },
+  { k:'P',    en:'Phosphate P',      zh:'磷'         },
+];
+
+const MICRO = [
+  { k:'Fe', en:'Iron Fe',       zh:'铁' },
+  { k:'Mn', en:'Manganese Mn',  zh:'锰' },
+  { k:'Zn', en:'Zinc Zn',       zh:'锌' },
+  { k:'B',  en:'Boron B',       zh:'硼' },
+  { k:'Cu', en:'Copper Cu',     zh:'铜' },
+  { k:'Mo', en:'Molybdenum Mo', zh:'钼' },
+];
+
+const TABS = [
+  { id:'1', en:'Base Water & Acid',   zh:'原水与加酸'   },
+  { id:'2', en:'Crop & Stage',        zh:'作物与物候'   },
+  { id:'3', en:'Measurement & Diag.', zh:'测定与诊断'   },
+  { id:'4', en:'Irrigation & LF',     zh:'灌溉与排液比' },
+  { id:'5', en:'A/B Stock Tanks',     zh:'A/B 母液罐'   },
+];
+
+const DEFAULT_BASE_WATER  = { Na:1.2, Cl:1.0, HCO3:2.5, Ca:1.5, Mg:0.6, S:0.8 };
+const DEFAULT_ROOT_ZONE   = { NH4:0.2, K:7.2, Na:2.7, Ca:11.4, Mg:6.0, NO3:22.1, Cl:2.8, S:7.9, P:2.8 };
+const DEFAULT_RZ_MICRO    = { Fe:41, Mn:3.8, Zn:7.6, B:144, Cu:2.1, Mo:1.4 };
+const DEFAULT_DRAIN       = { K:1.4, Ca:2.5, Mg:1.2, NO3:4.4, Cl:0.6, S:1.6, P:0.6 };
+
+const state = { crops: [], crop: null, gates: [], emergency: null };
+
+/* ══════════════════ HELPERS ══════════════════ */
+
+const $  = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+/** Round for display without lying about precision. */
+function fmt(v, dp = 2) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return '—';
+  return Number(v).toFixed(dp);
+}
+
+function openModal(id)  { $(id).classList.remove('hidden'); }
+function closeModal(id) { $(id).classList.add('hidden'); }
+
+function saveApi() {
+  const v = $('apiUrl').value.trim().replace(/\/+$/, '');
+  if (!v) return;
+  API = v;
+  localStorage.setItem(API_KEY, API);
+  closeModal('apiModal');
+  ping();
+}
+
+function resetApi() {
+  localStorage.removeItem(API_KEY);
+  API = DEFAULT_API;
+  $('apiUrl').value = API;
+  closeModal('apiModal');
+  ping();
+}
+
+/* ── input validation: no negatives, no NaN ── */
+
+function fieldError(el, msg) {
+  const holder = el.parentElement.querySelector('[data-err]');
+  if (msg) {
+    el.classList.add('field-bad');
+    if (holder) holder.textContent = msg;
+  } else {
+    el.classList.remove('field-bad');
+    if (holder) holder.textContent = '';
+  }
+}
+
+/**
+ * Validate one numeric input. Returns the number, or null when invalid or
+ * blank-and-optional. Blocks negatives and NaN at the field level so a bad
+ * value can never reach the engine.
+ */
+function readNum(el, { required = false, min = 0, max = Infinity } = {}) {
+  if (typeof el === 'string') el = $(el);
+  if (!el) return null;
+  // A number input whose content cannot be parsed reports an EMPTY value but
+  // sets validity.badInput. Without this check, "abc" would look like a blank
+  // optional field and pass silently.
+  if (el.validity && el.validity.badInput) {
+    fieldError(el, 'Must be a number (必须为数字)');
+    return NaN;
+  }
+  const raw = el.value.trim();
+  if (raw === '') {
+    fieldError(el, required ? 'Required (必填)' : '');
+    return required ? NaN : null;
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v)) { fieldError(el, 'Must be a number (必须为数字)'); return NaN; }
+  const lo = el.min !== '' ? Number(el.min) : min;
+  const hi = el.max !== '' ? Number(el.max) : max;
+  if (v < lo)  { fieldError(el, `Must be ≥ ${lo} (不得小于 ${lo})`); return NaN; }
+  if (v > hi)  { fieldError(el, `Must be ≤ ${hi} (不得大于 ${hi})`); return NaN; }
+  fieldError(el, '');
+  return v;
+}
+
+/** Collect an ion grid into {ion: value}, skipping blanks. */
+function readIonGrid(prefix, ions) {
+  const out = {};
+  let bad = false;
+  for (const ion of ions) {
+    const el = $(prefix + ion);
+    if (!el) continue;
+    const v = readNum(el);
+    if (Number.isNaN(v)) { bad = true; continue; }
+    if (v !== null) out[ion] = v;
+  }
+  return bad ? null : out;
+}
+
+function buildIonGrid(containerId, ions, prefix, defaults, unit) {
+  const html = ions.map(i => `
+    <div>
+      <label class="block text-[11px] font-medium text-slate-600 mb-0.5" for="${prefix}${i.k}">
+        ${esc(i.en)} <span class="text-slate-400">(${esc(i.zh)})</span>
+      </label>
+      <input id="${prefix}${i.k}" type="number" step="0.01" min="0" max="9999"
+        value="${defaults && defaults[i.k] !== undefined ? defaults[i.k] : ''}"
+        placeholder="0.00"
+        class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm tabular-nums
+               focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
+      <p data-err class="text-[10px] text-red-600 mt-0.5 min-h-[12px]"></p>
+    </div>`).join('');
+  $(containerId).innerHTML = html;
+  $(containerId).querySelectorAll('input').forEach(el => {
+    el.addEventListener('input', () => readNum(el));
+    el.addEventListener('keydown', ev => { if (ev.key === '-' || ev.key === 'e') ev.preventDefault(); });
+  });
+}
+
+/* ── network ── */
+
+async function api(path, body) {
+  const opts = body
+    ? { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }
+    : { method:'GET' };
+  const res = await fetch(API + path, opts);
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = json && json.detail ? json.detail : `HTTP ${res.status}`;
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+  }
+  return json;
+}
+
+function busy(outId, label) {
+  $(outId).innerHTML = `
+    <div class="bg-white rounded-xl border border-slate-200 p-5 flex items-center gap-3 text-sm text-slate-500">
+      <svg class="animate-spin h-4 w-4 text-brand-600" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-25"/>
+        <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      ${esc(label)}
+    </div>`;
+}
+
+function errorCard(outId, err) {
+  $(outId).innerHTML = `
+    <div class="bg-red-50 border-2 border-red-300 rounded-xl p-5">
+      <h3 class="font-bold text-red-800">Request failed <span class="font-normal">(请求失败)</span></h3>
+      <p class="mt-1 text-sm text-red-700 font-mono break-all">${esc(err.message)}</p>
+      <p class="mt-2 text-xs text-red-600">
+        Is the backend running? Start it with
+        <code class="bg-red-100 px-1 rounded">uvicorn main:app --reload</code>
+        <span class="block text-red-500">(后端是否已启动？请使用上述命令启动服务。)</span>
+      </p>
+    </div>`;
+}
+
+/* ══════════════════ RENDERING ══════════════════ */
+
+const SEV = {
+  BLOCKING: { box:'bg-red-50 border-red-400',      chip:'bg-red-600 text-white',      icon:'⛔' },
+  CRITICAL: { box:'bg-orange-50 border-orange-400', chip:'bg-orange-600 text-white',  icon:'⚠' },
+  WARNING:  { box:'bg-amber-50 border-amber-300',   chip:'bg-amber-500 text-amber-950', icon:'⚡' },
+  INFO:     { box:'bg-blue-50 border-blue-300',     chip:'bg-blue-600 text-white',    icon:'ℹ' },
+};
+
+function renderGates(gates) {
+  if (!gates || !gates.length) {
+    return `<div class="bg-emerald-50 border border-emerald-300 rounded-xl p-4 text-sm text-emerald-800">
+      ✓ No gates raised <span class="text-emerald-600">(未触发任何闸门)</span></div>`;
+  }
+  const items = gates.map(g => {
+    const s = SEV[g.severity] || SEV.INFO;
+    return `
+      <div class="border-2 ${s.box} rounded-xl p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-bold px-2 py-0.5 rounded ${s.chip}">${s.icon} ${esc(g.severity_text || g.severity)}</span>
+          <span class="text-xs font-mono text-slate-500">${esc(g.gate_id)}</span>
+        </div>
+        <h4 class="mt-2 font-bold text-slate-800 text-sm">${esc(g.title_text)}</h4>
+        <p class="mt-1 text-sm text-slate-700 leading-relaxed">${esc(g.message_text)}</p>
+        ${g.remedy_text ? `<p class="mt-2 text-sm text-slate-600 bg-white/70 rounded-lg p-2 border border-slate-200">
+          <span class="font-semibold">Remedy (处置措施):</span> ${esc(g.remedy_text)}</p>` : ''}
+        <p class="mt-2 text-[10px] font-mono text-slate-400">${esc(g.provenance || '')}</p>
+      </div>`;
+  }).join('');
+  return `<div class="space-y-3">
+    <h3 class="text-sm font-bold text-slate-700">Engine Gates <span class="text-slate-500">(引擎闸门)</span></h3>
+    ${items}</div>`;
+}
+
+function card(titleEn, titleZh, inner) {
+  return `<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <h3 class="text-base font-bold text-slate-800 mb-3">
+      ${esc(titleEn)} <span class="text-brand-600">(${esc(titleZh)})</span></h3>
+    ${inner}</div>`;
+}
+
+function kv(rows) {
+  return `<dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">${
+    rows.map(([k, v, cls]) => `
+      <div class="flex justify-between gap-3 border-b border-slate-100 pb-1">
+        <dt class="text-slate-500">${esc(k)}</dt>
+        <dd class="font-semibold tabular-nums text-right ${cls || 'text-slate-800'}">${v}</dd>
+      </div>`).join('')}</dl>`;
+}
+
+function updateGateCounts(gates) {
+  const n = s => (gates || []).filter(g => g.severity === s).length;
+  $('cntBlocking').textContent = `${n('BLOCKING')} blocking (阻断)`;
+  $('cntCritical').textContent = `${n('CRITICAL')} critical (严重)`;
+  $('cntWarning').textContent  = `${n('WARNING')} warning (警告)`;
+  $('cntBlocking').className = `text-[11px] font-bold px-2 py-0.5 rounded ${n('BLOCKING') ? 'bg-red-600 text-white' : 'bg-red-100 text-red-700'}`;
+  $('cntCritical').className = `text-[11px] font-bold px-2 py-0.5 rounded ${n('CRITICAL') ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-700'}`;
+  $('cntWarning').className  = `text-[11px] font-bold px-2 py-0.5 rounded ${n('WARNING') ? 'bg-amber-500 text-amber-950' : 'bg-amber-100 text-amber-700'}`;
+}
+
+/* ══════════════════ STATUS CARDS (pH / EC) ══════════════════ */
+
+const GREEN = { card:'border-emerald-500 bg-emerald-50', badge:'bg-emerald-600 text-white',  val:'text-emerald-700' };
+const AMBER = { card:'border-amber-500 bg-amber-50',     badge:'bg-amber-500 text-amber-950', val:'text-amber-700'  };
+const RED   = { card:'border-red-600 bg-red-50 alarm',   badge:'bg-red-600 text-white',      val:'text-red-700'    };
+const GREY  = { card:'border-slate-200 bg-slate-50',     badge:'bg-slate-200 text-slate-600', val:'text-slate-400' };
+
+function paint(prefix, tone, value, badge, msg) {
+  $(prefix + 'Card').className  = `rounded-xl border-2 p-3 transition-all ${tone.card}`;
+  $(prefix + 'Badge').className = `text-[10px] font-bold px-2 py-0.5 rounded-full ${tone.badge}`;
+  $(prefix + 'Badge').textContent = badge;
+  $(prefix + 'Value').className = `text-3xl font-bold tabular-nums ${tone.val}`;
+  $(prefix + 'Value').textContent = value;
+  $(prefix + 'Msg').textContent = msg;
+}
+
+/** Local, immediate colouring. The backend gate remains authoritative. */
+function liveStatus() {
+  const ph = readNum('rzPH');
+  const ec = readNum('rzEC');
+
+  if (ph === null || Number.isNaN(ph)) {
+    paint('ph', GREY, '–.–', '—', 'Awaiting measurement (等待测定)');
+  } else if (ph < 5.2) {
+    paint('ph', RED, fmt(ph, 1), 'EMERGENCY (紧急)',
+      'Below the 5.2 floor — emergency flush required (低于 5.2 下限 — 需紧急冲洗)');
+  } else if (ph < 5.5 || ph > 6.5) {
+    paint('ph', AMBER, fmt(ph, 1), 'REVIEW (复核)',
+      'Outside the 5.5–6.5 hydroponic optimum (超出 5.5–6.5 无土栽培适宜区间)');
+  } else {
+    paint('ph', GREEN, fmt(ph, 1), 'SAFE (安全)',
+      'Within the hydroponic optimum (处于无土栽培适宜区间)');
+  }
+
+  const ecTarget = state.crop ? state.crop.ec_root_zone_ms_cm : null;
+  if (ec === null || Number.isNaN(ec)) {
+    paint('ec', GREY, '–.–', '—', 'Awaiting measurement (等待测定)');
+  } else if (ec > 4.5) {
+    paint('ec', RED, fmt(ec, 2), 'EMERGENCY (紧急)',
+      'Above the 4.5 mS/cm ceiling — emergency flush required (高于 4.5 mS/cm 上限 — 需紧急冲洗)');
+  } else if (ecTarget && ec > ecTarget * 1.15) {
+    paint('ec', AMBER, fmt(ec, 2), 'HIGH (偏高)',
+      `Above the ${ecTarget} mS/cm crop target (高于作物目标 ${ecTarget} mS/cm)`);
+  } else if (ecTarget && ec < ecTarget * 0.6) {
+    paint('ec', AMBER, fmt(ec, 2), 'LOW (偏低)',
+      `Below the ${ecTarget} mS/cm crop target (低于作物目标 ${ecTarget} mS/cm)`);
+  } else {
+    paint('ec', GREEN, fmt(ec, 2), 'SAFE (安全)',
+      ecTarget ? `Near the ${ecTarget} mS/cm crop target (接近作物目标 ${ecTarget} mS/cm)`
+               : 'Within the safe envelope (处于安全区间)');
+  }
+}
+
+/* ══════════════════ TABS ══════════════════ */
+
+function buildTabs() {
+  $('tabBar').innerHTML = TABS.map((t, i) => `
+    <button data-tab="${t.id}" onclick="showTab('${t.id}')"
+      class="tab-btn whitespace-nowrap px-4 py-3 text-sm font-semibold border-b-[3px] transition
+             ${i === 0 ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-700'}">
+      <span class="text-[11px] text-slate-400 mr-1">${i + 1}</span>
+      ${esc(t.en)} <span class="font-normal text-slate-400">(${esc(t.zh)})</span>
+    </button>`).join('');
+}
+
+function showTab(id) {
+  document.querySelectorAll('[data-panel]').forEach(p =>
+    p.classList.toggle('hidden', p.dataset.panel !== id));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const on = b.dataset.tab === id;
+    b.className = `tab-btn whitespace-nowrap px-4 py-3 text-sm font-semibold border-b-[3px] transition ${
+      on ? 'border-brand-600 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`;
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/* ══════════════════ MODULE 1 — BASE WATER & ACID ══════════════════ */
+
+async function runModule1() {
+  const ec = readNum('bwEC', { required:true });
+  const ph = readNum('bwPH', { required:true });
+  const macro = readIonGrid('bw', MACRO.map(m => m.k));
+  const micro = readIonGrid('bwm', MICRO.map(m => m.k));
+  if (Number.isNaN(ec) || Number.isNaN(ph) || !macro || !micro) {
+    return errorCard('out1', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
+  }
+  busy('out1', 'Calculating acid dosing… (正在计算加酸量…)');
+  try {
+    const r = await api('/api/v1/m1/acid-dosing', {
+      crop_id: $('cropSelect').value || 'tomato',
+      base_water_mmol: macro,
+      base_water_micro_umol: micro,
+      base_water_ec: ec,
+      base_water_ph: ph,
+      irrigation_type: $('bwIrrig').value,
+      organic_matter_present: $('bwOrganic').checked,
+      recirculating: $('bwRecirc').checked,
+      policy: { hco3_buffer_mmol_l: Number($('bwBuffer').value) },
+    });
+    const d = r.data;
+    const lvlTone = d.water_quality_level === 1 ? 'text-emerald-700'
+                  : d.water_quality_level === 2 ? 'text-amber-700' : 'text-red-700';
+    $('out1').innerHTML =
+      card('Acid Dosing Result', '加酸计算结果', `
+        <div class="mb-4 rounded-lg border-2 ${d.feasible ? 'border-emerald-300 bg-emerald-50' : 'border-red-300 bg-red-50'} p-3">
+          <p class="text-sm font-bold ${d.feasible ? 'text-emerald-800' : 'text-red-800'}">${esc(d.feasible_text)}</p>
+          <p class="mt-1 text-xs text-slate-600">${esc(d.hco3_buffer_text)}</p>
+        </div>
+        ${kv([
+          ['Water Quality Level (水质等级)', esc(d.water_quality_level_text), lvlTone],
+          ['Suitability (适用性)', `<span class="text-xs font-normal">${esc(d.water_suitability_text)}</span>`],
+          ['HCO₃ in Base Water (原水碳酸氢盐)', `${fmt(d.hco3_base_water_mmol_l)} mmol/L`],
+          ['HCO₃ Retained (保留碳酸氢盐)', `${fmt(d.hco3_residual_mmol_l)} mmol/L`, 'text-emerald-700'],
+          ['H⁺ Required (所需质子)', `${fmt(d.h_required_mmol_l)} mmol/L`],
+          ['H⁺ Shortfall (质子缺口)', `${fmt(d.shortfall_mmol_l)} mmol/L`,
+            d.shortfall_mmol_l > 0 ? 'text-red-700' : 'text-slate-800'],
+          ['Nitric Acid 38% (硝酸 38%)', `<span class="text-brand-700">${fmt(d.nitric_acid_38pct_l_per_1000l)} L</span> / 1000 L`],
+          ['Phosphoric Acid 59% (磷酸 59%)', `${fmt(d.phosphoric_acid_59pct_l_per_1000l)} L / 1000 L`],
+          ['NO₃ Contributed by Acid (酸带入硝酸根)', `${fmt(d.no3_contributed_mmol_l)} mmol/L`],
+          ['P Contributed by Acid (酸带入磷)', `${fmt(d.p_contributed_mmol_l)} mmol/L`],
+        ])}
+        <p class="mt-3 text-[11px] font-mono text-slate-500 bg-slate-50 rounded p-2">${esc(d.reaction)}</p>
+        <p class="mt-2 text-[11px] text-slate-500">${esc(d.base_water_fe_credited_text)}</p>
+      `) + '<div class="mt-5">' + renderGates(r.gates) + '</div>';
+    updateGateCounts(r.gates);
+  } catch (e) { errorCard('out1', e); }
+}
+
+/* ══════════════════ MODULE 5 — CROP & STAGE ══════════════════ */
+
+async function loadCrops() {
+  const r = await api('/api/v1/crops');
+  state.crops = r.crops;
+  $('cropSelect').innerHTML = r.crops.map(c =>
+    `<option value="${esc(c.crop_id)}">${esc(c.name_text)} — ${esc(c.medium_text)}</option>`).join('');
+  await onCropChange();
+}
+
+async function onCropChange() {
+  const id = $('cropSelect').value;
+  if (!id) return;
+  state.crop = await api('/api/v1/crops/' + encodeURIComponent(id));
+  const c = state.crop;
+
+  $('cropSummary').textContent = c.name_text;
+  $('cropStage').textContent =
+    `EC target ${c.ec_root_zone_ms_cm} · Na ≤ ${c.na_max_root_zone_mmol_l} mmol/L (目标电导率 / 钠上限)`;
+
+  $('stageBoxes').innerHTML = c.adjustments.map(a => `
+    <label class="inline-flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition">
+      <input type="checkbox" class="stage-box rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+        value="${esc(a.stage)}">
+      ${esc(a.label_text)}
+    </label>`).join('');
+
+  const targets = Object.entries(c.root_zone_targets);
+  $('cropDetail').innerHTML = card('Crop Reference Values', '作物参考值', `
+    ${kv([
+      ['Botanical Name (学名)', `<em class="font-normal">${esc(c.botanical)}</em>`],
+      ['Growing Medium (栽培基质)', esc(c.medium_text)],
+      ['Root Zone pH (根际 pH)', `${c.ph_root_zone[0]} – ${c.ph_root_zone[1]}`],
+      ['Fertigation pH (滴灌 pH)', String(c.ph_fertigation)],
+      ['Root Zone EC (根际电导率)', `${c.ec_root_zone_ms_cm} mS/cm`],
+      ['Fertigation EC (滴灌电导率)', `${c.ec_fertigation_ms_cm} mS/cm`],
+      ['Max Root Zone Na (根际钠上限)', `${c.na_max_root_zone_mmol_l} mmol/L`, 'text-amber-700'],
+      ['Source Page (来源页码)', `p. ${c.source_page}`],
+    ])}
+    <div class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div>
+        <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+          Fertigation Solution (施肥液配方) — mmol/L</h4>
+        ${miniTable(c.fertigation_solution_mmol_l, 'mmol/L')}
+      </div>
+      <div>
+        <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+          Micronutrients (微量元素) — µmol/L</h4>
+        ${miniTable(c.fertigation_micro_umol_l, 'µmol/L')}
+      </div>
+    </div>
+    <div class="mt-4">
+      <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+        Root Zone Targets (根际目标值 / Streefcijfers)</h4>
+      ${miniTable(Object.fromEntries(targets), '')}
+    </div>
+  `);
+  liveStatus();
+}
+
+function miniTable(obj, unit) {
+  const entries = Object.entries(obj || {});
+  if (!entries.length) return '<p class="text-xs text-slate-400">—</p>';
+  return `<div class="overflow-x-auto"><table class="w-full text-sm">
+    <tbody>${entries.map(([k, v]) => `
+      <tr class="border-b border-slate-100">
+        <td class="py-1 text-slate-600">${esc(k)}</td>
+        <td class="py-1 text-right font-semibold tabular-nums">${fmt(v, 2)}
+          <span class="text-[10px] font-normal text-slate-400">${esc(unit)}</span></td>
+      </tr>`).join('')}</tbody></table></div>`;
+}
+
+function selectedStages() {
+  return Array.from(document.querySelectorAll('.stage-box:checked')).map(b => b.value);
+}
+
+async function runModule5() {
+  const stages = selectedStages();
+  busy('out2', 'Applying stage adjustments… (正在应用阶段调整…)');
+  try {
+    const r = await api('/api/v1/m5/steering', {
+      crop_id: $('cropSelect').value,
+      stages,
+      dry_back_intent: $('dryBack').value,
+    });
+    const d = r.data;
+    const deltas = Object.entries(d.applied_deltas);
+    $('cropStage').textContent = stages.length
+      ? `Stage: ${stages.join(' + ')} (阶段：${stages.join(' + ')})`
+      : 'Stage: standard (阶段：标准)';
+
+    $('out2').innerHTML =
+      card('Stage Adjustment Result', '阶段调整结果', `
+        ${kv([
+          ['K:Ca Ratio (钾钙比)', fmt(d.k_ca_ratio, 3)],
+          ['K:N Ratio (钾氮比)', fmt(d.k_n_ratio, 3)],
+          ['Dry-back Intent (回干策略)', esc(d.dry_back_intent_text)],
+          ['Dry-back Target (回干目标)',
+            `<span class="text-amber-700">${d.dry_back_target_pct_min}–${d.dry_back_target_pct_max}%</span>`],
+        ])}
+        <div class="mt-4">
+          <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            Applied Deltas (已应用调整量)</h4>
+          ${deltas.length ? `<div class="flex flex-wrap gap-2">${deltas.map(([k, v]) => `
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-lg ${
+              v > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}">
+              ${esc(k)} ${v > 0 ? '+' : ''}${fmt(v, 2)}</span>`).join('')}</div>`
+            : '<p class="text-xs text-slate-400">No stage selected (未选择阶段)</p>'}
+        </div>
+        <div class="mt-4 overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b-2 border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
+              <th class="text-left py-2">Ion (离子)</th>
+              <th class="text-right py-2">Before (调整前)</th>
+              <th class="text-right py-2">After (调整后)</th>
+            </tr></thead>
+            <tbody>${Object.keys(d.fertigation_after_mmol_l).map(k => {
+              const before = d.fertigation_before_mmol_l[k], after = d.fertigation_after_mmol_l[k];
+              const chg = Math.abs(after - before) > 1e-9;
+              return `<tr class="border-b border-slate-100 ${chg ? 'bg-blue-50/50' : ''}">
+                <td class="py-1.5 font-medium">${esc(k)}</td>
+                <td class="py-1.5 text-right tabular-nums text-slate-500">${fmt(before)}</td>
+                <td class="py-1.5 text-right tabular-nums font-semibold ${chg ? 'text-brand-700' : ''}">${fmt(after)}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>
+        ${d.notes && d.notes.length ? `<div class="mt-3 space-y-1">${d.notes.map(n =>
+          `<p class="text-[11px] text-slate-500 bg-slate-50 rounded p-2">${esc(n)}</p>`).join('')}</div>` : ''}
+        <p class="mt-3 text-[11px] text-amber-700">${esc(d.dry_back_provenance_text)}</p>
+      `) + '<div class="mt-5">' + renderGates(r.gates) + '</div>';
+    updateGateCounts(r.gates);
+  } catch (e) { errorCard('out2', e); }
+}
+
+/* ══════════════════ MODULE 8 — EMERGENCY GATE ══════════════════ */
+
+function renderEmergency(p) {
+  if (!p.emergency) {
+    return `<div class="bg-emerald-50 border-2 border-emerald-400 rounded-xl p-5">
+      <h3 class="text-lg font-bold text-emerald-800">✓ ${esc(p.status_text)}</h3>
+      <p class="mt-1 text-sm text-emerald-700">${esc(p.message_text)}</p>
+      <p class="mt-2 text-xs text-emerald-600">
+        pH ${fmt(p.measured_ph, 1)} (floor ${p.limit_ph_min}) ·
+        EC ${fmt(p.measured_ec_ms_cm, 2)} mS/cm (ceiling ${p.limit_ec_max})</p>
+    </div>`;
+  }
+  return `<div class="bg-red-50 border-4 border-red-600 rounded-xl p-5 alarm">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="text-xs font-bold px-2 py-1 rounded bg-red-600 text-white">⛔ ${esc(p.severity_text)}</span>
+      <span class="text-xs font-mono text-red-500">${esc(p.gate_id)}</span>
+    </div>
+    <h3 class="mt-3 text-xl font-black text-red-800">⚠ ${esc(p.title_text)}</h3>
+    <p class="mt-2 text-sm font-semibold text-red-700">${esc(p.reason_text)}</p>
+    <p class="mt-1 text-sm font-bold text-red-900 bg-red-100 rounded-lg px-3 py-2 inline-block">
+      ${esc(p.status_text)}</p>
+    <ol class="mt-4 space-y-2">${p.instructions.map(s => `
+      <li class="flex gap-3 bg-white rounded-lg border border-red-200 p-3">
+        <span class="shrink-0 w-6 h-6 rounded-full bg-red-600 text-white text-xs font-bold
+                     flex items-center justify-center">${s.step}</span>
+        <span class="text-sm text-slate-800 leading-relaxed">${esc(s.action_text)}</span>
+      </li>`).join('')}</ol>
+    <p class="mt-3 text-[11px] font-mono text-red-500">${esc(p.provenance)}</p>
+    <p class="mt-1 text-[11px] text-red-600">
+      Narrative layer bypassed — this instruction set is hardcoded.
+      <span class="text-red-500">(已绕过叙述层 — 本指令集为固化内容。)</span></p>
+  </div>`;
+}
+
+async function runEmergency() {
+  const ph = readNum('rzPH', { required:true });
+  const ec = readNum('rzEC', { required:true });
+  if (Number.isNaN(ph) || Number.isNaN(ec)) {
+    return errorCard('out3', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
+  }
+  busy('out3', 'Checking emergency gate… (正在检查紧急闸门…)');
+  try {
+    const p = await api('/api/v1/m8/emergency', { ph, ec, crop_id: $('cropSelect').value });
+    state.emergency = p;
+    $('out3').innerHTML = renderEmergency(p);
+    liveStatus();
+    updateGateCounts(p.emergency ? [{ severity:'BLOCKING' }] : []);
+  } catch (e) { errorCard('out3', e); }
+}
+
+/* ══════════════════ MODULE 4 — DIAGNOSTICS ══════════════════ */
+
+async function runModule4() {
+  const ec = readNum('rzEC', { required:true });
+  const ph = readNum('rzPH', { required:true });
+  const macro = readIonGrid('rz', MACRO.map(m => m.k));
+  const micro = readIonGrid('rzm', MICRO.map(m => m.k));
+  if (Number.isNaN(ec) || Number.isNaN(ph) || !macro || !micro) {
+    return errorCard('out3', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
+  }
+  busy('out3', 'Running diagnostics… (正在运行综合诊断…)');
+  try {
+    const r = await api('/api/v1/m8/diagnostics', {
+      crop_id: $('cropSelect').value,
+      root_zone_mmol: macro,
+      root_zone_micro_umol: micro,
+      root_zone_ec: ec,
+      root_zone_ph: ph,
+    });
+    if (r.emergency) {                       // gate precedence: engine halted
+      state.emergency = r;
+      $('out3').innerHTML = renderEmergency(r);
+      updateGateCounts([{ severity:'BLOCKING' }]);
+      liveStatus();
+      return;
+    }
+    const d = r.data;
+    const bandTone = b => b === 'HIGH' ? 'bg-red-100 text-red-800'
+                        : b === 'LOW'  ? 'bg-blue-100 text-blue-800'
+                                       : 'bg-emerald-100 text-emerald-800';
+    const rows = d.comparison_rows.map(x => `
+      <tr class="border-b border-slate-100 ${x.correction_level ? 'bg-amber-50/40' : ''}">
+        <td class="py-1.5 font-medium">${esc(x.ion)}</td>
+        <td class="py-1.5 text-right tabular-nums">${fmt(x.analysis)}</td>
+        <td class="py-1.5 text-right tabular-nums text-slate-500">${fmt(x.at_reference_ec)}</td>
+        <td class="py-1.5 text-right tabular-nums">${fmt(x.target)}</td>
+        <td class="py-1.5 text-right tabular-nums ${Math.abs(x.deviation_pct) >= 50 ? 'text-red-700 font-bold'
+              : Math.abs(x.deviation_pct) >= 25 ? 'text-amber-700 font-semibold' : 'text-slate-400'}">
+          ${x.deviation_pct > 0 ? '+' : ''}${fmt(x.deviation_pct, 1)}%</td>
+        <td class="py-1.5 text-center">
+          <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${bandTone(x.band)}">${esc(x.band)}</span></td>
+        <td class="py-1.5 text-right tabular-nums font-semibold ${
+          x.supply_adjustment_pct > 0 ? 'text-emerald-700'
+          : x.supply_adjustment_pct < 0 ? 'text-red-700' : 'text-slate-300'}">
+          ${x.supply_adjustment_pct > 0 ? '+' : ''}${fmt(x.supply_adjustment_pct, 1)}%</td>
+        <td class="py-1.5 text-center text-[10px] text-slate-500">${x.correction_level || '—'}</td>
+      </tr>`).join('');
+
+    const cb = d.cation_balance_pct;
+    const cbBar = `<div class="flex h-6 rounded-lg overflow-hidden text-[10px] font-bold text-white">
+      ${[['Na', cb.Na, 'bg-red-500'], ['K', cb.K, 'bg-purple-500'],
+         ['Ca', cb.Ca, 'bg-blue-500'], ['Mg', cb.Mg, 'bg-emerald-500']]
+        .filter(([, v]) => v > 0)
+        .map(([n, v, c]) => `<div class="${c} flex items-center justify-center" style="width:${v}%"
+              title="${n} ${v}%">${v >= 8 ? n + ' ' + v + '%' : ''}</div>`).join('')}</div>`;
+
+    $('out3').innerHTML =
+      card('Root Zone Diagnostics', '根际综合诊断', `
+        <div class="mb-3 text-xs text-slate-500">
+          ${esc(d.reference_ec_text)}:
+          EC<sub>ref</sub> ${d.reference_ec.ec_reference_ms_cm} ·
+          EC<sub>nutrients</sub> ${d.reference_ec.ec_nutrients_ms_cm} ·
+          factor ${d.reference_ec.conversion_factor}
+        </div>
+        <div class="overflow-x-auto -mx-5 px-5">
+          <table class="w-full text-sm min-w-[720px]">
+            <thead><tr class="border-b-2 border-slate-200 text-[11px] text-slate-500 uppercase tracking-wide">
+              <th class="text-left py-2">Ion (离子)</th>
+              <th class="text-right py-2">Analysis (分析值)</th>
+              <th class="text-right py-2">At Ref EC (参比换算)</th>
+              <th class="text-right py-2">Target (目标值)</th>
+              <th class="text-right py-2">Deviation (偏差)</th>
+              <th class="text-center py-2">Band (区间)</th>
+              <th class="text-right py-2">Adjust (调整)</th>
+              <th class="text-center py-2">Lvl (级)</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="mt-5">
+          <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            ${esc(d.cation_balance_text)}</h4>
+          ${cbBar}
+        </div>
+        ${d.antagonism_patterns.length ? `<div class="mt-4">
+          <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+            ${esc(d.antagonism_text)}</h4>
+          <div class="space-y-2">${d.antagonism_patterns.map(a => `
+            <div class="bg-purple-50 border border-purple-200 rounded-lg p-2.5">
+              <p class="text-sm font-semibold text-purple-900">${esc(a.pattern_text)}</p>
+              <p class="text-[11px] font-mono text-purple-600 mt-0.5">${esc(JSON.stringify(a.evidence))}</p>
+            </div>`).join('')}</div></div>` : ''}
+        <p class="mt-4 text-[11px] text-slate-500 bg-slate-50 rounded p-2">${esc(d.rules_text)}</p>
+        <p class="mt-1 text-[11px] text-slate-500 bg-slate-50 rounded p-2">${esc(d.micro_ladder_text)}</p>
+      `) + '<div class="mt-5">' + renderGates(r.gates) + '</div>';
+    updateGateCounts(r.gates);
+    liveStatus();
+  } catch (e) { errorCard('out3', e); }
+}
+
+/* ══════════════════ MODULE 2 — SODIUM GATE ══════════════════ */
+
+async function runModule2() {
+  const na = readNum('rzNa');
+  const sys = readNum('sysVol', { required:true });
+  const bwNa = readNum('bwNa');
+  if (na === null || Number.isNaN(na)) {
+    return errorCard('out3', new Error('Enter root zone Na first (请先填写根际钠浓度)'));
+  }
+  if (Number.isNaN(sys)) {
+    return errorCard('out3', new Error('Enter a valid system volume (请填写有效的系统液量)'));
+  }
+  busy('out3', 'Checking sodium gate… (正在检查钠离子闸门…)');
+  try {
+    const r = await api('/api/v1/m2/sodium', {
+      crop_id: $('cropSelect').value,
+      na_root_zone_mmol: na,
+      na_base_water_mmol: bwNa || 0,
+      system_volume_l_m2: sys,
+      drain_composition_mmol: readIonGrid('dr', MACRO.map(m => m.k)) || undefined,
+    });
+    const d = r.data;
+    const tone = d.status === 'SAFE' ? 'border-emerald-400 bg-emerald-50'
+               : d.status === 'APPROACHING' ? 'border-amber-400 bg-amber-50'
+               : 'border-red-500 bg-red-50';
+    const pct = Math.min(100, d.utilisation_pct);
+    const barColor = d.status === 'SAFE' ? 'bg-emerald-500'
+                   : d.status === 'APPROACHING' ? 'bg-amber-500' : 'bg-red-600';
+    const loss = Object.entries(d.nutrient_loss_g_m2 || {});
+
+    $('out3').innerHTML =
+      card('Sodium Accumulation Gate', '钠离子累积闸门', `
+        <div class="rounded-lg border-2 ${tone} p-4 mb-4">
+          <p class="text-base font-bold text-slate-800">${esc(d.status_text)}</p>
+          <div class="mt-3">
+            <div class="flex justify-between text-[11px] text-slate-500 mb-1">
+              <span>0</span><span>Limit ${d.na_limit_mmol_l} mmol/L (上限)</span>
+            </div>
+            <div class="h-4 bg-slate-200 rounded-full overflow-hidden">
+              <div class="h-full ${barColor} transition-all" style="width:${pct}%"></div>
+            </div>
+            <p class="mt-1 text-xs text-slate-600 font-semibold">
+              ${fmt(d.na_root_zone_mmol_l)} mmol/L — ${fmt(d.utilisation_pct, 1)}% of ceiling (占上限比例)</p>
+          </div>
+        </div>
+        ${kv([
+          ['Root Zone Na (根际钠)', `${fmt(d.na_root_zone_mmol_l)} mmol/L · ${fmt(d.na_root_zone_ppm, 0)} ppm`],
+          ['Crop Ceiling (作物上限)', `${d.na_limit_mmol_l} mmol/L · ${fmt(d.na_limit_ppm, 0)} ppm`],
+          ['Flush Target (冲洗目标)', `${fmt(d.na_target_mmol_l)} mmol/L`],
+          ['Headroom (剩余余量)', `${fmt(d.headroom_mmol_l)} mmol/L`,
+            d.headroom_mmol_l < 0 ? 'text-red-700' : 'text-emerald-700'],
+          ['Base Water Na (原水钠)', `${fmt(d.na_base_water_mmol_l)} mmol/L`],
+          ['System Volume (系统液量)', `${fmt(d.system_volume_l_m2, 1)} L/m²`],
+          ['Discharge Volume (排液量)',
+            `<span class="${d.discharge_required ? 'text-red-700 text-base' : ''}">${fmt(d.discharge_volume_l_m2, 1)} L/m²</span>`],
+          ['Limit Source (上限来源)', `<span class="text-[10px] font-mono">${esc(d.na_limit_source)}</span>`],
+        ])}
+        ${loss.length ? `<div class="mt-4">
+          <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">${esc(d.nutrient_loss_text)}</h4>
+          <div class="flex flex-wrap gap-2">${loss.map(([k, v]) =>
+            `<span class="text-xs bg-red-50 text-red-800 border border-red-200 rounded px-2 py-1">
+              ${esc(k)} ${fmt(v, 2)} g/m²</span>`).join('')}</div></div>` : ''}
+      `) + '<div class="mt-5">' + renderGates(r.gates) + '</div>';
+    updateGateCounts(r.gates);
+  } catch (e) { errorCard('out3', e); }
+}
+
+/* ══════════════════ MODULE 3 — LEACHING FRACTION ══════════════════ */
+
+async function runModule3() {
+  const vi = readNum('lfIrrig',   { required:true });
+  const vd = readNum('lfDrain',   { required:true });
+  const ed = readNum('lfEcDrip',  { required:true });
+  const er = readNum('lfEcDrain', { required:true });
+  if ([vi, vd, ed, er].some(v => Number.isNaN(v) || v === null)) {
+    return errorCard('out4', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
+  }
+  if (vd > vi) {
+    fieldError($('lfDrain'), 'Drain cannot exceed irrigation (排液量不得大于灌溉量)');
+    return errorCard('out4', new Error('Drain volume cannot exceed irrigation volume (排液量不得大于灌溉量)'));
+  }
+  busy('out4', 'Calculating leaching fraction… (正在计算排液比…)');
+  try {
+    const r = await api('/api/v1/m3/leaching', {
+      irrigation_volume_l_m2: vi, drain_volume_l_m2: vd,
+      ec_dripper: ed, ec_drain: er,
+    });
+    const d = r.data;
+    const lfTone = d.band === 'DEFICIT' || d.band === 'EXCESS' ? 'text-amber-700'
+                 : d.band === 'WASH' ? 'text-blue-700' : 'text-emerald-700';
+    const dTone = d.wash_required ? 'text-red-700' : 'text-emerald-700';
+    const marks = [10, 20, 30, 40];
+
+    $('out4').innerHTML =
+      card('Leaching Fraction Result', '排液比计算结果', `
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div class="rounded-lg border-2 border-slate-200 bg-slate-50 p-4">
+            <p class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">
+              ${esc(d.leaching_fraction_text)}</p>
+            <p class="mt-1 text-4xl font-bold tabular-nums ${lfTone}">${fmt(d.leaching_fraction_pct, 1)}<span class="text-lg">%</span></p>
+            <p class="mt-1 text-xs font-semibold text-slate-600">${esc(d.band_text)}</p>
+          </div>
+          <div class="rounded-lg border-2 ${d.wash_required ? 'border-red-400 bg-red-50' : 'border-slate-200 bg-slate-50'} p-4">
+            <p class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">
+              ${esc(d.delta_ec_text)}</p>
+            <p class="mt-1 text-4xl font-bold tabular-nums ${dTone}">${fmt(d.delta_ec_ms_cm, 2)}</p>
+            <p class="mt-1 text-xs font-semibold text-slate-600">${esc(d.wash_required_text)}</p>
+          </div>
+        </div>
+        <div class="relative h-8 bg-gradient-to-r from-amber-200 via-emerald-200 to-amber-200 rounded-lg overflow-hidden">
+          <div class="absolute inset-y-0 bg-brand-600/80 w-1" style="left:${Math.min(99, d.leaching_fraction_pct)}%"></div>
+          ${marks.map(m => `<div class="absolute inset-y-0 border-l border-white/70" style="left:${m}%"></div>`).join('')}
+        </div>
+        <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+          <span>0%</span><span>10%</span><span>20%</span><span>30%</span><span>40%</span><span>50%+</span>
+        </div>
+        <div class="mt-4">${kv([
+          ['Wash Trigger (冲洗触发阈值)', `ΔEC ≥ ${d.wash_trigger_delta_ec} mS/cm`],
+          ['Target LF When Washing (冲洗目标排液比)', `${d.target_lf_pct_min}–${d.target_lf_pct_max}%`],
+          ['Extra Irrigation Needed (需增加灌溉量)', `${fmt(d.extra_irrigation_l_m2, 2)} L/m²`],
+        ])}</div>
+        <p class="mt-3 text-[11px] font-mono text-slate-500 bg-slate-50 rounded p-2">${esc(d.formula_text)}</p>
+        <p class="mt-2 text-[11px] text-amber-700">${esc(d.provenance_text)}</p>
+      `) + '<div class="mt-5">' + renderGates(r.gates) + '</div>';
+    updateGateCounts(r.gates);
+  } catch (e) { errorCard('out4', e); }
+}
+
+/* ══════════════════ MODULE 6 — A/B STOCK TANKS ══════════════════ */
+
+function tankTable(items, tone) {
+  if (!items || !items.length) {
+    return '<p class="text-sm text-slate-400 py-3">No fertilisers allocated (无肥料分配)</p>';
+  }
+  return `<div class="overflow-x-auto"><table class="w-full text-sm">
+    <thead><tr class="border-b-2 ${tone.border} text-[11px] text-slate-500 uppercase tracking-wide">
+      <th class="text-left py-2">Fertiliser (肥料)</th>
+      <th class="text-left py-2 hidden sm:table-cell">Formula (化学式)</th>
+      <th class="text-right py-2">Quantity (用量)</th>
+    </tr></thead>
+    <tbody>${items.map(f => `
+      <tr class="border-b border-slate-100">
+        <td class="py-2">
+          <span class="font-medium text-slate-800">${esc(f.fertiliser_text)}</span>
+          ${f.is_micronutrient ? '<span class="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">micro</span>' : ''}
+        </td>
+        <td class="py-2 hidden sm:table-cell font-mono text-[11px] text-slate-400">${esc(f.formula || '—')}</td>
+        <td class="py-2 text-right font-bold tabular-nums ${tone.text} whitespace-nowrap">${esc(f.mass_display)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
+}
+
+async function runFullPipeline() {
+  const tankVol = readNum('tankVol', { required:true });
+  const cf      = readNum('tankCF',  { required:true });
+  if (Number.isNaN(tankVol) || Number.isNaN(cf)) {
+    return errorCard('out5', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
+  }
+
+  const bwMacro = readIonGrid('bw',  MACRO.map(m => m.k)) || {};
+  const bwMicro = readIonGrid('bwm', MICRO.map(m => m.k)) || {};
+  const rzMacro = readIonGrid('rz',  MACRO.map(m => m.k)) || {};
+  const rzMicro = readIonGrid('rzm', MICRO.map(m => m.k)) || {};
+  const drain   = readIonGrid('dr',  MACRO.map(m => m.k)) || {};
+
+  const body = {
+    crop_id: $('cropSelect').value,
+    stages: selectedStages(),
+    base_water_mmol: bwMacro,
+    base_water_micro_umol: bwMicro,
+    base_water_ec: readNum('bwEC') || 0,
+    root_zone_mmol: Object.keys(rzMacro).length ? rzMacro : null,
+    root_zone_micro_umol: Object.keys(rzMicro).length ? rzMicro : null,
+    root_zone_ec: readNum('rzEC'),
+    root_zone_ph: readNum('rzPH') ?? 5.8,
+    drain_mmol: Object.keys(drain).length ? drain : null,
+    drain_reuse_fraction: (readNum('lfReuse') || 0) / 100,
+    ec_dripper: readNum('lfEcDrip'),
+    ec_drain: readNum('lfEcDrain'),
+    irrigation_volume_l_m2: readNum('lfIrrig'),
+    drain_volume_l_m2: readNum('lfDrain'),
+    system_volume_l_m2: readNum('sysVol') || 0,
+    irrigation_type: $('bwIrrig').value,
+    recirculating: $('bwRecirc').checked,
+    disinfection: $('disinfect').value,
+    organic_matter_present: $('bwOrganic').checked,
+    boron_source: $('boronSrc').value,
+    dry_back_intent: $('dryBack').value,
+    policy: {
+      tank_volume_l: tankVol,
+      concentration_factor: cf,
+      hco3_buffer_mmol_l: Number($('bwBuffer').value),
+    },
+  };
+
+  busy('out5', 'Running full pipeline… (正在运行完整流程…)');
+  try {
+    const r = await api('/api/v1/session/run', body);
+
+    if (r.pipeline_halted && r.emergency) {   // gate precedence in action
+      $('out5').innerHTML = renderEmergency(r) + `
+        <div class="mt-4 bg-slate-800 text-slate-100 rounded-xl p-4 text-sm">
+          <p class="font-bold">Recipe output suspended <span class="font-normal text-slate-300">(配方输出已暂停)</span></p>
+          <p class="mt-1 text-slate-300 text-xs">
+            The A/B tank bill is deliberately withheld while the emergency gate is open.
+            <span class="block text-slate-400">(紧急闸门开启期间，A/B 母液罐配方被刻意隐藏。)</span></p>
+        </div>`;
+      updateGateCounts([{ severity:'BLOCKING' }]);
+      return;
+    }
+
+    const m = r.data.modules;
+    const m6 = m.M6 || {}, m7 = m.M7 || {};
+    const A = { border:'border-blue-300', text:'text-blue-700' };
+    const B = { border:'border-emerald-300', text:'text-emerald-700' };
+    const bal = m7.ion_balance || {};
+
+    $('out5').innerHTML = `
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div class="bg-white rounded-xl shadow-sm border-2 border-blue-300 p-5">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h3 class="text-base font-bold text-blue-800">
+              Stock Tank A <span class="text-blue-600">(A 母液罐)</span></h3>
+            <span class="text-sm font-bold bg-blue-100 text-blue-800 rounded-lg px-3 py-1 tabular-nums">
+              ${fmt(m6.tank_a_total_kg, 1)} kg</span>
+          </div>
+          <p class="mt-1 text-[11px] text-slate-500">
+            Calcium fertilisers and chelates (钙肥与螯合物)</p>
+          <div class="mt-3">${tankTable(m6.tank_a, A)}</div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border-2 border-emerald-300 p-5">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h3 class="text-base font-bold text-emerald-800">
+              Stock Tank B <span class="text-emerald-600">(B 母液罐)</span></h3>
+            <span class="text-sm font-bold bg-emerald-100 text-emerald-800 rounded-lg px-3 py-1 tabular-nums">
+              ${fmt(m6.tank_b_total_kg, 1)} kg</span>
+          </div>
+          <p class="mt-1 text-[11px] text-slate-500">
+            Sulphate and phosphate fertilisers (硫酸盐与磷酸盐肥)</p>
+          <div class="mt-3">${tankTable(m6.tank_b, B)}</div>
+        </div>
+      </div>
+
+      <div class="mt-5 bg-amber-50 border-2 border-amber-300 rounded-xl p-4">
+        <p class="text-sm font-bold text-amber-900">
+          Separation rule <span class="font-normal">(分罐规则)</span></p>
+        <p class="mt-1 text-sm text-amber-800">
+          All calcium fertilisers must be separated from phosphate and sulphate fertilisers,
+          otherwise CaSO₄ and Ca₃(PO₄)₂ precipitate at 100× concentration and block the system.
+          <span class="block text-amber-700">
+            (所有钙肥必须与磷酸盐、硫酸盐肥分开存放，否则在 100 倍浓缩条件下将析出 CaSO₄ 与 Ca₃(PO₄)₂ 沉淀并堵塞系统。)</span>
+        </p>
+        <p class="mt-2 text-sm text-amber-800">
+          Tank A pH 3.5–5.0 · Tank B pH below 5.0
+          <span class="text-amber-700">(A 罐 pH 3.5–5.0 · B 罐 pH 低于 5.0)</span></p>
+      </div>
+
+      <div class="mt-5">${card('Final Fertigation Recipe', '最终施肥配方', `
+        ${kv([
+          ['Tank Volume (罐容积)', `${fmt(tankVol, 0)} L`],
+          ['Concentration Factor (浓缩倍数)', `${fmt(cf, 0)}×`],
+          ['Cation Scale Factor (阳离子换算系数)', fmt(m7.scale_factors?.f_cations, 4)],
+          ['Anion Scale Factor (阴离子换算系数)', fmt(m7.scale_factors?.f_anions, 4)],
+          ['Ion Balance (离子平衡)', esc(bal.balanced_text || '—'),
+            bal.balanced ? 'text-emerald-700' : 'text-amber-700'],
+          ['Balance Difference (平衡偏差)', `${fmt(bal.difference_pct, 2)}%`],
+        ])}
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+              Final Recipe (最终配方) — mmol/L</h4>
+            ${miniTable(m7.final_recipe_mmol_l, 'mmol/L')}
+          </div>
+          <div>
+            <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
+              Base Water Credit (原水抵扣) — mmol/L</h4>
+            ${miniTable(m7.base_water_credit_mmol_l, 'mmol/L')}
+            ${Object.keys(m7.base_water_excess_mmol_l || {}).length ? `
+              <p class="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                Base water exceeds target for:
+                ${esc(Object.entries(m7.base_water_excess_mmol_l).map(([k, v]) => `${k} +${v}`).join(', '))}
+                <span class="block text-amber-600">(原水中以下离子已超过配方目标)</span></p>` : ''}
+          </div>
+        </div>
+        ${m6.fe_chelate_text ? `<p class="mt-4 text-[11px] text-slate-600 bg-blue-50 border border-blue-200 rounded p-2">
+          <span class="font-semibold">Fe chelate (铁螯合物):</span> ${esc(m6.fe_chelate_text)}</p>` : ''}
+      `)}</div>
+
+      <div class="mt-5">${renderGates(r.gates)}</div>
+
+      <p class="mt-4 text-[11px] text-center text-slate-400">${esc(r.llm_note_text || '')}</p>`;
+    updateGateCounts(r.gates);
+  } catch (e) { errorCard('out5', e); }
+}
+
+/* ══════════════════ BOOT ══════════════════ */
+
+async function ping() {
+  try {
+    const h = await api('/health');
+    $('connDot').className  = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+    $('connText').textContent = `Connected — ${h.crops_loaded} crops (已连接 — ${h.crops_loaded} 种作物)`;
+    await loadCrops();
+    return true;
+  } catch (e) {
+    $('connDot').className  = 'w-2.5 h-2.5 rounded-full bg-red-500';
+    $('connText').textContent = 'Offline (未连接)';
+    $('out1').innerHTML = `
+      <div class="bg-red-50 border-2 border-red-300 rounded-xl p-5">
+        <h3 class="font-bold text-red-800">Backend not reachable <span class="font-normal">(无法连接后端)</span></h3>
+        <p class="mt-2 text-sm text-red-700">Start the API, then reload this page:</p>
+        <pre class="mt-2 bg-red-900 text-red-50 rounded-lg p-3 text-xs overflow-x-auto">uvicorn main:app --reload</pre>
+        <p class="mt-2 text-xs text-red-600">
+          Current target: <code class="font-mono">${esc(API)}</code> —
+          change it under API Settings (可在「接口设置」中修改目标地址)</p>
+      </div>`;
+    return false;
+  }
+}
+
+function init() {
+  buildTabs();
+  buildIonGrid('bwMacro',    MACRO, 'bw',  DEFAULT_BASE_WATER, 'mmol/L');
+  buildIonGrid('bwMicro',    MICRO, 'bwm', { Fe:0 },           'µmol/L');
+  buildIonGrid('rzMacro',    MACRO, 'rz',  DEFAULT_ROOT_ZONE,  'mmol/L');
+  buildIonGrid('rzMicro',    MICRO, 'rzm', DEFAULT_RZ_MICRO,   'µmol/L');
+  buildIonGrid('drainMacro', MACRO, 'dr',  DEFAULT_DRAIN,      'mmol/L');
+
+  $('apiUrl').value = API;
+
+  ['bwEC','bwPH','rzEC','rzPH','sysVol','lfIrrig','lfDrain','lfEcDrip','lfEcDrain',
+   'lfReuse','tankVol','tankCF'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.insertAdjacentHTML('afterend', '<p data-err class="text-[10px] text-red-600 mt-0.5 min-h-[12px]"></p>');
+    el.addEventListener('input', () => { readNum(el); if (id === 'rzEC' || id === 'rzPH') liveStatus(); });
+    el.addEventListener('keydown', ev => { if (ev.key === '-' || ev.key === 'e') ev.preventDefault(); });
+  });
+
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { closeModal('legalModal'); closeModal('apiModal'); }
+  });
+  [['legalModal'], ['apiModal']].forEach(([id]) => {
+    $(id).addEventListener('click', ev => { if (ev.target.id === id) closeModal(id); });
+  });
+
+  liveStatus();
+  ping();
+
+  if (!localStorage.getItem('fh_seen_disclaimer')) {
+    openModal('legalModal');
+    localStorage.setItem('fh_seen_disclaimer', '1');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

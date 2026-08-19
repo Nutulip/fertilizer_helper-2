@@ -1,0 +1,34 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# With this file in the repository root, Render can configure the whole service
+# automatically: choose "New +" -> "Blueprint" and point it at your repo.
+# You can also ignore this file and fill the same values into the web GUI.
+
+services:
+  - type: web
+    name: fertilizer-helper
+    runtime: python
+    plan: free
+
+    # Free-tier regions: oregon, ohio, virginia, frankfurt, singapore.
+    #   frankfurt -> best for Europe
+    #   singapore -> noticeably better latency for East Asia
+    # A free service can only exist in one region. Pick the one matching most
+    # of your users; see the note about China in the deployment guide.
+    region: frankfurt
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      # Render's default Python may lag behind the newest release. 3.12 is
+      # well supported and runs this codebase unchanged.
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      # Comma-separated origin allowlist, or "*" for any browser origin.
+      # The app serves its own frontend, so same-origin calls need nothing;
+      # this only matters if you call the API from another site.
+      - key: ALLOWED_ORIGINS
+        value: "*"

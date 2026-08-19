@@ -1,0 +1,13 @@
+# Production dependencies — pinned to the versions this project was built and
+# tested against. Regenerate with:  pip freeze > requirements.txt
+#
+# The engine itself (constants.py, engine.py) uses only the Python standard
+# library. Everything below is for the web layer.
+
+fastapi==0.141.1
+uvicorn==0.49.0
+pydantic==2.13.4
+
+# Development only — needed by fastapi.testclient, not by the deployed server.
+# Install locally with:  pip install httpx
+# httpx==0.28.1

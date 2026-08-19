@@ -1,0 +1,508 @@
+"""
+WUR reference data — atomic weights, fertiliser catalogue, crop benchmarks.
+
+Source: Van der Lugt, G. et al. (2020). "Nutrient Solutions for Greenhouse Crops",
+Version 4. ISBN 9789464021844. Eurofins Agro / Nouryon / SQM / Yara.
+
+Every constant below is transcribed from the manual with its page citation.
+Nothing in this module is invented.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+# --------------------------------------------------------------------------
+# Bilingual helper (中英双语)
+# --------------------------------------------------------------------------
+
+def bi(en: str, zh: str) -> str:
+    """Render a bilingual display string: 'English Term (中文翻译)'."""
+    return f"{en} ({zh})"
+
+
+# --------------------------------------------------------------------------
+# WUR Atomic Weight Matrix — Table 7, p. 39 (g/mol == mg/mmol == ug/umol)
+# --------------------------------------------------------------------------
+
+ATOMIC_WEIGHTS: dict[str, float] = {
+    # Macronutrients (required by spec)
+    "K": 39.10,
+    "Ca": 40.08,
+    "Mg": 24.31,
+    "N": 14.00,
+    "P": 30.97,
+    "S": 32.06,
+    # Remaining macro ions from Table 7
+    "N_NO3": 14.00,
+    "N_NH4": 14.00,
+    "NO3": 14.00,      # reported as N-NO3
+    "NH4": 14.00,      # reported as N-NH4
+    "Na": 22.99,
+    "Cl": 35.45,
+    "HCO3": 61.02,
+    # Micronutrients
+    "Fe": 55.85,
+    "Mn": 54.94,
+    "Zn": 65.38,
+    "B": 10.81,
+    "Cu": 63.55,
+    "Mo": 95.94,
+}
+
+# Ion charge for equivalent arithmetic — Formulas 1-2, p. 21.
+# H+ participates as a cation (proven by Table 3 step 7 balance closure).
+ION_CHARGE: dict[str, int] = {
+    "NH4": 1, "K": 1, "Na": 1, "Ca": 2, "Mg": 2, "H": 1,
+    "NO3": 1, "Cl": 1, "S": 2, "HCO3": 1, "P": 1,
+}
+CATIONS = ("NH4", "K", "Na", "Ca", "Mg", "H")
+ANIONS = ("NO3", "Cl", "S", "HCO3", "P")
+
+EC_DIVISOR = 20.0                 # Formula 4, p. 21
+ION_BALANCE_TOLERANCE = 0.10      # <10% acceptable, p. 21
+REFERENCE_EC_OFFSET = 0.30        # EC_ref = EC_target - 0.30, p. 21
+NA_EC_FACTOR = 0.10               # EC_nutrients = EC - 0.1 * Na, p. 22
+
+# Oxide <-> elemental conversion — Table 4, p. 25
+OXIDE_TO_ELEMENTAL: dict[str, float] = {
+    "NO3_to_N": 0.226, "NH4_to_N": 0.776, "P2O5_to_P": 0.436,
+    "K2O_to_K": 0.830, "CaO_to_Ca": 0.715, "MgO_to_Mg": 0.603,
+    "SO4_to_S": 0.334, "SO3_to_S": 0.400,
+}
+ELEMENTAL_TO_OXIDE: dict[str, float] = {
+    "N_to_NO3": 4.426, "N_to_NH4": 1.288, "P_to_P2O5": 2.292,
+    "K_to_K2O": 1.205, "Ca_to_CaO": 1.399, "Mg_to_MgO": 1.658,
+    "S_to_SO4": 2.996, "S_to_SO3": 2.497,
+}
+
+
+# --------------------------------------------------------------------------
+# Fertiliser catalogue — Table 5, p. 26; tank class from Ch. 9, p. 31
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Fertiliser:
+    fid: str
+    name_en: str
+    name_zh: str
+    formula: str
+    formula_mass: float                    # g/mol of the written formula
+    driving_ion: str                       # ion used to size the dose
+    yields: dict[str, float]               # mol ion per mol fertiliser
+    tank: str                              # "A" | "B" | "EITHER"
+    phase: str = "solid"
+    density: float | None = None           # kg/L, liquids only
+    micro_ion: str | None = None
+    micro_fraction: float | None = None    # w/w fraction, e.g. 0.06 for Fe 6%
+    sodium_bearing: bool = False
+    chelate_agent: str | None = None
+    ph_stability: tuple[float, float] | None = None
+
+    @property
+    def name(self) -> str:
+        return bi(self.name_en, self.name_zh)
+
+    @property
+    def mass_per_mol_ion(self) -> float:
+        """
+        Grams of product per mole of the DRIVING ion.
+
+        This is the 'MW' in `kg = mmol/L * MW * 0.1`. Calcium nitrate is
+        1080 g/mol but carries 5 Ca, so the divisor is 1080/5 = 216 (p. 28).
+        Using the raw formula mass here over-doses by 5x.
+        """
+        return self.formula_mass / self.yields[self.driving_ion]
+
+
+FERTILISERS: dict[str, Fertiliser] = {
+    # ---- acids ----
+    "hno3_38": Fertiliser(
+        "hno3_38", "Nitric acid 38%", "硝酸 38%", "HNO3", 167.0,
+        driving_ion="H", yields={"H": 1, "NO3": 1},
+        tank="EITHER", phase="liquid", density=1.24),
+    "hno3_60": Fertiliser(
+        "hno3_60", "Nitric acid 60%", "硝酸 60%", "HNO3", 105.0,
+        driving_ion="H", yields={"H": 1, "NO3": 1},
+        tank="EITHER", phase="liquid", density=1.37),
+    "h3po4_59": Fertiliser(
+        "h3po4_59", "Phosphoric acid 59%", "磷酸 59%", "H3PO4", 167.0,
+        driving_ion="H", yields={"H": 1, "P": 1},
+        tank="B", phase="liquid", density=1.42),
+
+    # ---- main elements ----
+    "can_solid": Fertiliser(
+        "can_solid", "Calcium nitrate solid", "固体硝酸钙",
+        "5[Ca(NO3)2.2H2O].NH4NO3", 1080.0,
+        driving_ion="Ca", yields={"Ca": 5, "NH4": 1, "NO3": 11}, tank="A"),
+    "cacl2_s": Fertiliser(
+        "cacl2_s", "Calcium chloride anhydrous", "无水氯化钙", "CaCl2", 111.0,
+        driving_ion="Cl", yields={"Ca": 1, "Cl": 2}, tank="A"),
+    "map": Fertiliser(
+        "map", "Monoammonium phosphate", "磷酸一铵", "NH4H2PO4", 115.0,
+        driving_ion="NH4", yields={"NH4": 1, "P": 1}, tank="B"),
+    "nh4no3_liq": Fertiliser(
+        "nh4no3_liq", "Ammonium nitrate liquid", "液体硝酸铵", "NH4NO3", 156.0,
+        driving_ion="NH4", yields={"NH4": 1, "NO3": 1},
+        tank="EITHER", phase="liquid", density=1.25),
+    "mkp": Fertiliser(
+        "mkp", "Monopotassium phosphate", "磷酸二氢钾", "KH2PO4", 136.1,
+        driving_ion="P", yields={"K": 1, "P": 1}, tank="B"),
+    "mgso4": Fertiliser(
+        "mgso4", "Magnesium sulphate", "七水硫酸镁", "MgSO4.7H2O", 246.4,
+        driving_ion="Mg", yields={"Mg": 1, "S": 1}, tank="B"),
+    "mgno3_s": Fertiliser(
+        "mgno3_s", "Magnesium nitrate", "六水硝酸镁", "Mg(NO3)2.6H2O", 256.0,
+        driving_ion="Mg", yields={"Mg": 1, "NO3": 2}, tank="EITHER"),
+    "k2so4": Fertiliser(
+        "k2so4", "Potassium sulphate", "硫酸钾", "K2SO4", 174.3,
+        driving_ion="S", yields={"K": 2, "S": 1}, tank="B"),
+    "kno3": Fertiliser(
+        "kno3", "Potassium nitrate", "硝酸钾", "KNO3", 101.1,
+        driving_ion="K", yields={"K": 1, "NO3": 1}, tank="EITHER"),
+    "kcl": Fertiliser(
+        "kcl", "Potassium chloride", "氯化钾", "KCl", 74.6,
+        driving_ion="Cl", yields={"K": 1, "Cl": 1}, tank="EITHER"),
+
+    # ---- micronutrients: chelates (tank A preferred, Ch. 9 p. 31) ----
+    "fe_edta": Fertiliser(
+        "fe_edta", "Iron chelate Fe-EDTA 13%", "铁螯合物 Fe-EDTA 13%", "Fe-EDTA",
+        429.0, driving_ion="Fe", yields={"Fe": 1}, tank="A",
+        micro_ion="Fe", micro_fraction=0.13,
+        chelate_agent="EDTA", ph_stability=(1.5, 6.5)),
+    "fe_dtpa": Fertiliser(
+        "fe_dtpa", "Iron chelate Fe-DTPA 6%", "铁螯合物 Fe-DTPA 6%", "Fe-DTPA",
+        931.0, driving_ion="Fe", yields={"Fe": 1}, tank="A",
+        micro_ion="Fe", micro_fraction=0.06,
+        chelate_agent="DTPA", ph_stability=(1.5, 7.5)),
+    "fe_eddha": Fertiliser(
+        "fe_eddha", "Iron chelate Fe-EDDHA 6%", "铁螯合物 Fe-EDDHA 6%", "Fe-EDDHA",
+        931.0, driving_ion="Fe", yields={"Fe": 1}, tank="A",
+        micro_ion="Fe", micro_fraction=0.06,
+        chelate_agent="EDDHA", ph_stability=(3.0, 10.0)),
+    "fe_hbed": Fertiliser(
+        "fe_hbed", "Iron chelate Fe-HBED 6%", "铁螯合物 Fe-HBED 6%", "Fe-HBED",
+        931.0, driving_ion="Fe", yields={"Fe": 1}, tank="A",
+        micro_ion="Fe", micro_fraction=0.06,
+        chelate_agent="HBED", ph_stability=(3.0, 12.0)),
+    "mn_edta": Fertiliser(
+        "mn_edta", "Manganese EDTA 13%", "锰螯合物 Mn-EDTA 13%", "Mn-EDTA",
+        423.0, driving_ion="Mn", yields={"Mn": 1}, tank="A",
+        micro_ion="Mn", micro_fraction=0.13,
+        chelate_agent="EDTA", ph_stability=(3.0, 10.0)),
+    "zn_edta": Fertiliser(
+        "zn_edta", "Zinc EDTA 15%", "锌螯合物 Zn-EDTA 15%", "Zn-EDTA",
+        436.0, driving_ion="Zn", yields={"Zn": 1}, tank="A",
+        micro_ion="Zn", micro_fraction=0.15,
+        chelate_agent="EDTA", ph_stability=(2.0, 10.0)),
+    "cu_edta": Fertiliser(
+        "cu_edta", "Copper EDTA 15%", "铜螯合物 Cu-EDTA 15%", "Cu-EDTA",
+        424.0, driving_ion="Cu", yields={"Cu": 1}, tank="A",
+        micro_ion="Cu", micro_fraction=0.15,
+        chelate_agent="EDTA", ph_stability=(1.5, 10.0)),
+
+    # ---- micronutrients: salts (tank B, Ch. 9 p. 31) ----
+    "borax": Fertiliser(
+        "borax", "Borax 11.3% B", "硼砂 11.3% B", "Na2B4O7.10H2O", 381.0,
+        driving_ion="B", yields={"B": 4}, tank="B",
+        micro_ion="B", micro_fraction=0.113, sodium_bearing=True),
+    "h3bo3": Fertiliser(
+        "h3bo3", "Boric acid 17.5% B", "硼酸 17.5% B", "H3BO3", 62.0,
+        driving_ion="B", yields={"B": 1}, tank="B",
+        micro_ion="B", micro_fraction=0.175),
+    "na_moly": Fertiliser(
+        "na_moly", "Sodium molybdate 39.6%", "钼酸钠 39.6%", "Na2MoO4.2H2O",
+        241.9, driving_ion="Mo", yields={"Mo": 1}, tank="B",
+        micro_ion="Mo", micro_fraction=0.396, sodium_bearing=True),
+    "mnso4": Fertiliser(
+        "mnso4", "Manganese sulphate 32.5%", "硫酸锰 32.5%", "MnSO4.H2O", 169.0,
+        driving_ion="Mn", yields={"Mn": 1, "S": 1}, tank="B",
+        micro_ion="Mn", micro_fraction=0.325),
+    "znso4": Fertiliser(
+        "znso4", "Zinc sulphate 22.7%", "硫酸锌 22.7%", "ZnSO4.7H2O", 287.5,
+        driving_ion="Zn", yields={"Zn": 1, "S": 1}, tank="B",
+        micro_ion="Zn", micro_fraction=0.227),
+    "cuso4": Fertiliser(
+        "cuso4", "Copper sulphate 25.5%", "硫酸铜 25.5%", "CuSO4.5H2O", 249.7,
+        driving_ion="Cu", yields={"Cu": 1, "S": 1}, tank="B",
+        micro_ion="Cu", micro_fraction=0.255),
+}
+
+
+# --------------------------------------------------------------------------
+# Water quality levels — Table 1, p. 11
+# --------------------------------------------------------------------------
+
+WATER_QUALITY_LEVELS = [
+    {"level": 1, "ec_max": 0.5, "ion_max": 1.5, "na_ppm": "< 34", "cl_ppm": "< 53",
+     "suitability_en": "Suitable for all crops",
+     "suitability_zh": "适用于所有作物"},
+    {"level": 2, "ec_max": 1.0, "ion_max": 2.5, "na_ppm": "34 - 57", "cl_ppm": "53 - 87",
+     "suitability_en": "Not suitable when recirculation is necessary",
+     "suitability_zh": "需要循环回用时不适用"},
+    {"level": 3, "ec_max": 1.5, "ion_max": 4.0, "na_ppm": "57 - 92", "cl_ppm": "87 - 142",
+     "suitability_en": "Not to be used for salt-sensitive crops",
+     "suitability_zh": "不可用于盐敏感作物"},
+]
+
+
+# --------------------------------------------------------------------------
+# Maximum root-zone Na — Table 2, p. 12
+#
+# NOTE: these are the manual's values. The project brief quoted Tomato <= 15
+# and Cucumber <= 8; both are looser than the source (8 and 6 respectively).
+# See design.md section 2.2, discrepancy D-1. Overrides are possible through
+# SitePolicy.na_overrides but are badged as practice, never as WUR canon.
+# --------------------------------------------------------------------------
+
+NA_LIMITS_MMOL_L: dict[str, float] = {
+    "tomato": 8.0,
+    "sweet_pepper": 6.0,
+    "eggplant": 6.0,
+    "cucumber": 6.0,
+    "melon": 6.0,
+    "rose": 4.0,
+    "gerbera": 4.0,
+    "carnation": 4.0,
+    "orchid": 1.0,
+}
+
+CL_OFFSET_MMOL_L = 0.2   # Cl ceiling = Na ceiling + 0.2-0.5 mmol/L, p. 12
+
+
+# --------------------------------------------------------------------------
+# Fe-chelate pH stability — Figure 3a, p. 35 (refined by Nouryon table, p. 27)
+# --------------------------------------------------------------------------
+
+FE_CHELATE_BANDS = {
+    "fe_edta": (1.5, 6.5),
+    "fe_dtpa": (1.5, 7.5),
+    "fe_eddha": (3.0, 10.0),
+    "fe_hbed": (3.0, 12.0),
+}
+FE_CHELATE_SWITCH_PH = 6.5     # p. 36 — NOT 7.0; see design.md D-2
+PROPHYLACTIC_SUBSTRATE = 0.25  # replace 25% of Fe with EDDHA/HBED, p. 36
+PROPHYLACTIC_NFT = 0.10        # replace 10% in NFT, p. 36
+
+
+# --------------------------------------------------------------------------
+# Average Plant Need — Table 6, p. 34 (umol/L)
+# --------------------------------------------------------------------------
+
+APN_UMOL_L = {
+    "rose":         {"Fe": 25, "Mn": 5,  "Zn": 3, "B": 20, "Cu": 0.8, "Mo": 0.5},
+    "potted_plant": {"Fe": 15, "Mn": 5,  "Zn": 4, "B": 10, "Cu": 0.5, "Mo": 0.5},
+    "tomato":       {"Fe": 15, "Mn": 10, "Zn": 5, "B": 30, "Cu": 0.8, "Mo": 0.5},
+}
+
+
+# --------------------------------------------------------------------------
+# Crop recipe benchmarks — Section B
+#
+# All three records below were transcribed from the RENDERED crop pages, not
+# from flat text extraction, because the four adjustment columns
+# (Start | Fruit Set | High water | End season) collapse and mis-assign when
+# the PDF is read as plain text. Each is verified by the ppm cross-check
+# mmol/L * atomic weight == printed ppm (see tests).
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StageAdjustment:
+    stage: str
+    label_en: str
+    label_zh: str
+    deltas: dict[str, float]          # mmol/L (macro) or umol/L (micro)
+    note_en: str = ""
+    note_zh: str = ""
+
+
+@dataclass(frozen=True)
+class CropRecipe:
+    crop_id: str
+    name_en: str
+    name_zh: str
+    botanical: str
+    medium: str
+    ph_root_zone: tuple[float, float]
+    ph_fertigation: float
+    ec_root_zone: float
+    ec_fertigation: float
+    root_zone_targets: dict[str, float]     # macro mmol/L, micro umol/L
+    fertigation: dict[str, float]           # macro mmol/L
+    micro_fertigation: dict[str, float]     # umol/L
+    na_max_root_zone: float
+    cl_max_root_zone: float
+    adjustments: tuple[StageAdjustment, ...]
+    source_page: int
+
+    @property
+    def name(self) -> str:
+        return bi(self.name_en, self.name_zh)
+
+
+_FRUIT_SET_NOTE_EN = ("Fruit-set adjustment may vary 0.25-2 mmol/L for K "
+                      "and 0.2-0.75 mmol/L for Ca.")
+_FRUIT_SET_NOTE_ZH = ("坐果期调整幅度：K 可在 0.25-2 mmol/L、"
+                      "Ca 可在 0.2-0.75 mmol/L 范围内变动。")
+_HIGH_WATER_NOTE_EN = "Recommended when water supply exceeds 5 L/m2/day."
+_HIGH_WATER_NOTE_ZH = "当供水量超过 5 L/m2/天 时建议采用。"
+_END_SEASON_NOTE_EN = ("End of the crop, after removal of the growth point. "
+                       "Mostly in autumn as the last fruits ripen.")
+_END_SEASON_NOTE_ZH = "生育末期，摘心之后；多在秋季末批果实成熟期。"
+
+
+CROPS: dict[str, CropRecipe] = {
+    # ---------------- TOMATO / INERT SUBSTRATE — p. 53 ----------------
+    "tomato": CropRecipe(
+        crop_id="tomato",
+        name_en="Tomato", name_zh="番茄",
+        botanical="Solanum lycopersicum",
+        medium="INERT_SUBSTRATE",
+        ph_root_zone=(5.5, 6.0), ph_fertigation=5.3,
+        ec_root_zone=4.0, ec_fertigation=2.6,
+        root_zone_targets={
+            "NH4": 0.5, "K": 8.0, "Ca": 10.0, "Mg": 4.5,
+            "NO3": 22.0, "S": 6.8, "P": 1.0,
+            "Fe": 35.0, "Mn": 5.0, "Zn": 7.0, "B": 50.0, "Cu": 0.7, "Mo": 0.5,
+        },
+        fertigation={
+            "NH4": 1.2, "K": 9.5, "Ca": 5.4, "Mg": 2.4,
+            "NO3": 15.0, "Cl": 1.0, "S": 4.4, "P": 1.5,
+        },
+        micro_fertigation={
+            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 0.75, "Mo": 0.5,
+        },
+        na_max_root_zone=8.0, cl_max_root_zone=8.0,
+        adjustments=(
+            StageAdjustment("start", "Start", "定植初期",
+                            {"NH4": -1.0, "K": -1.0, "Ca": 0.5, "Mg": 0.5,
+                             "Fe": 10.0, "B": 10.0}),
+            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
+                            {"K": 1.5, "Ca": -0.5, "Mg": -0.25},
+                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
+            StageAdjustment("high_water", "High Water Supply", "高供水量",
+                            {"K": -1.0, "Ca": 0.5},
+                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
+            StageAdjustment("end_season", "End of Season", "生育末期",
+                            {"NH4": -1.0, "P": -1.0},
+                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
+        ),
+        source_page=53,
+    ),
+
+    # ---------------- CUCUMBER / INERT SUBSTRATE — p. 41 ----------------
+    "cucumber": CropRecipe(
+        crop_id="cucumber",
+        name_en="Cucumber", name_zh="黄瓜",
+        botanical="Cucumis sativus",
+        medium="INERT_SUBSTRATE",
+        ph_root_zone=(5.2, 6.0), ph_fertigation=5.3,
+        ec_root_zone=3.0, ec_fertigation=2.2,
+        root_zone_targets={
+            "NH4": 0.5, "K": 8.0, "Ca": 6.5, "Mg": 3.0,
+            "NO3": 18.0, "S": 3.5, "P": 0.9,
+            "Fe": 30.0, "Mn": 7.0, "Zn": 7.0, "B": 50.0, "Cu": 1.5, "Mo": 0.5,
+        },
+        fertigation={
+            "NH4": 1.25, "K": 8.0, "Ca": 4.0, "Mg": 1.375,
+            "NO3": 16.0, "Cl": 0.0, "S": 1.375, "P": 1.25,
+        },
+        micro_fertigation={
+            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 25.0, "Cu": 0.75, "Mo": 0.5,
+        },
+        na_max_root_zone=6.0, cl_max_root_zone=6.0,
+        adjustments=(
+            StageAdjustment("start", "Start", "定植初期",
+                            {"NH4": -0.5, "K": -1.0, "Ca": 0.5, "Mg": 0.25,
+                             "Fe": 10.0, "B": 10.0}),
+            # +1 K and +1 N-NO3 == exactly 1.0 mmol/L KNO3 == 10.11 kg/1000 L
+            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
+                            {"K": 1.0, "NO3": 1.0},
+                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
+            StageAdjustment("high_water", "High Water Supply", "高供水量",
+                            {"K": -1.0, "Ca": 0.5},
+                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
+            StageAdjustment("end_season", "End of Season", "生育末期",
+                            {"NH4": -1.0, "P": -1.0},
+                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
+        ),
+        source_page=41,
+    ),
+
+    # ---------------- SWEET PEPPER / INERT SUBSTRATE — p. 50 ----------------
+    "sweet_pepper": CropRecipe(
+        crop_id="sweet_pepper",
+        name_en="Sweet Pepper", name_zh="甜椒",
+        botanical="Capsicum annuum",
+        medium="INERT_SUBSTRATE",
+        ph_root_zone=(6.0, 6.0), ph_fertigation=5.3,
+        ec_root_zone=3.0, ec_fertigation=2.2,
+        root_zone_targets={
+            "NH4": 0.5, "K": 5.0, "Ca": 8.5, "Mg": 3.0,
+            "NO3": 17.0, "S": 3.0, "P": 1.2,
+            "Fe": 25.0, "Mn": 5.0, "Zn": 7.0, "B": 80.0, "Cu": 0.7, "Mo": 0.5,
+        },
+        fertigation={
+            "NH4": 1.0, "K": 6.75, "Ca": 5.0, "Mg": 1.5,
+            "NO3": 16.0, "Cl": 0.0, "S": 1.75, "P": 1.25,
+        },
+        micro_fertigation={
+            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 1.0, "Mo": 0.5,
+        },
+        na_max_root_zone=6.0, cl_max_root_zone=6.0,
+        adjustments=(
+            StageAdjustment("start", "Start", "定植初期",
+                            {"NH4": -0.5, "K": -1.0, "Ca": 0.5, "Mg": 0.25,
+                             "Fe": 10.0, "B": 10.0}),
+            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
+                            {"K": 1.0, "NO3": 1.0},
+                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
+            StageAdjustment("high_water", "High Water Supply", "高供水量",
+                            {"K": -1.0, "Ca": 0.5},
+                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
+            StageAdjustment("end_season", "End of Season", "生育末期",
+                            {"NH4": -1.0, "P": -1.0},
+                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
+        ),
+        source_page=50,
+    ),
+}
+
+
+# --------------------------------------------------------------------------
+# Site policy — practice-layer defaults (SRC:PRACTICE, see design.md 2.2 D-4)
+# --------------------------------------------------------------------------
+
+@dataclass
+class SitePolicy:
+    # M1 — acid dosing
+    hco3_buffer_mmol_l: float = 0.50          # SRC:WUR p. 24 (range 0.50-0.75)
+    acid_policy: str = "NITRIC_FIRST"
+
+    # M2 — sodium
+    na_overrides: dict[str, float] = field(default_factory=dict)
+    na_safety_factor: float = 0.90
+    na_approach_ratio: float = 0.80
+    cl_offset: float = CL_OFFSET_MMOL_L
+
+    # M3 — leaching (SRC:PRACTICE)
+    wash_trigger_delta_ec: float = 2.0
+    wash_lf_min: float = 30.0
+    wash_lf_max: float = 35.0
+
+    # M4 — correction bands (SRC:WUR p. 22 thresholds, midpoint defaults)
+    band1_default: float = 0.125              # within 10-15%
+    band2_default: float = 0.20               # a further 15-25%
+
+    # M6 — tanks
+    tank_a_acid_cap_l: float = 4.0            # "a few litres per m3", p. 31
+    tank_volume_l: float = 1000.0
+    concentration_factor: float = 100.0
+
+    # M8 — emergency gate (SRC:PRACTICE thresholds)
+    meltdown_ph_min: float = 5.2
+    meltdown_ec_max: float = 4.5
+
+
+DEFAULT_POLICY = SitePolicy()
