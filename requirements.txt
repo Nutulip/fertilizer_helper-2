@@ -8,6 +8,9 @@ fastapi==0.141.1
 uvicorn==0.49.0
 pydantic==2.13.4
 
+# 追加下面这一行
+python-multipart>=0.0.6
+
 # Development only — needed by fastapi.testclient, not by the deployed server.
 # Install locally with:  pip install httpx
 # httpx==0.28.1

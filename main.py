@@ -12,6 +12,12 @@ string, e.g. "status_text": "Safe Zone (安全区域)".
 
 Run the API:
     uvicorn main:app --reload
+    python main.py              # reads HOST (default 127.0.0.1) and PORT (default 8000)
+
+Environment:
+    PORT              — bind port (default 8000)
+    HOST              — bind address (default 127.0.0.1)
+    ALLOWED_ORIGINS   — CORS origins, comma-separated (default *)
 
 Run the tests:
     python main.py test
@@ -1664,6 +1670,6 @@ if __name__ == "__main__":
     import uvicorn
     # Cloud platforms inject the port to bind. Locally these default to a
     # loopback address so the dev server is not exposed to the network.
-    host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "8000"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host=host, port=port)
