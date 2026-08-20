@@ -21,7 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from constants import (
-    ANIONS, ATOMIC_WEIGHTS, CATIONS, CROPS, DEFAULT_POLICY, EC_DIVISOR,
+    ANIONS, ATOMIC_WEIGHTS, CATIONS, DEFAULT_POLICY, DEFAULT_SUBSTRATE,
+    EC_DIVISOR, get_crop,
     FERTILISERS, FE_CHELATE_SWITCH_PH, ION_BALANCE_TOLERANCE, ION_CHARGE,
     NA_EC_FACTOR, NA_LIMITS_MMOL_L, PROPHYLACTIC_NFT, PROPHYLACTIC_SUBSTRATE,
     REFERENCE_EC_OFFSET, WATER_QUALITY_LEVELS, CropRecipe, Fertiliser,
@@ -411,15 +412,31 @@ class SodiumResult:
     nutrient_loss: dict[str, float]
 
 
-def na_limit_for(crop_id: str, policy: SitePolicy = DEFAULT_POLICY) -> tuple[float, str]:
-    canon = NA_LIMITS_MMOL_L.get(crop_id)
-    if canon is None and crop_id in CROPS:
-        canon = CROPS[crop_id].na_max_root_zone
+def na_limit_for(crop_id: str,
+                 substrate_type: str = DEFAULT_SUBSTRATE,
+                 policy: SitePolicy = DEFAULT_POLICY) -> tuple[float, str]:
+    """
+    The sodium ceiling is substrate-dependent, and dramatically so. Tomato is
+    8 mmol/L on inert substrate but 2 mmol/L on organic material, because the
+    organic figure is read from a 1:1.5 water extract rather than from the
+    root-zone solution itself. Applying the inert ceiling to an organic sample
+    would let sodium run to four times the published limit before any gate
+    fired, so the crop x substrate matrix is the authority here and Table 2
+    (p. 12, stated on the solution basis) is used only as a fallback.
+    """
+    crop = get_crop(crop_id, substrate_type)
+    if crop is not None:
+        canon = crop.na_max_root_zone
+        source = f"SRC:WUR crop page p.{crop.source_page} ({substrate_type})"
+    else:
+        canon = NA_LIMITS_MMOL_L.get(crop_id)
+        source = "SRC:WUR Table 2, p.12"
     if canon is None:
-        raise ValueError(f"No sodium limit known for crop '{crop_id}'")
+        raise ValueError(
+            f"No sodium limit known for crop '{crop_id}' on '{substrate_type}'")
     override = policy.na_overrides.get(crop_id)
     if override is None:
-        return canon, "SRC:WUR Table 2, p.12"
+        return canon, source
     return override, "SRC:PRACTICE site override"
 
 
@@ -428,7 +445,8 @@ def evaluate_sodium(crop_id: str,
                     na_base_water: float = 0.0,
                     system_volume_l_m2: float = 0.0,
                     drain_composition: dict[str, float] | None = None,
-                    policy: SitePolicy = DEFAULT_POLICY) -> SodiumResult:
+                    policy: SitePolicy = DEFAULT_POLICY,
+                    substrate_type: str = DEFAULT_SUBSTRATE) -> SodiumResult:
     """
     Mass balance for the forced-discharge volume (SRC:DERIVED — the manual
     states the requirement, not the formula):
@@ -436,7 +454,7 @@ def evaluate_sodium(crop_id: str,
         Na_after = (Na_cur * (V_sys - V_d) + Na_base * V_d) / V_sys
         =>  V_d  = V_sys * (Na_cur - Na_target) / (Na_cur - Na_base)
     """
-    limit, source = na_limit_for(crop_id, policy)
+    limit, source = na_limit_for(crop_id, substrate_type, policy)
     target = limit * policy.na_safety_factor
     headroom = limit - na_root_zone
     ratio = na_root_zone / limit if limit > EPS else float("inf")

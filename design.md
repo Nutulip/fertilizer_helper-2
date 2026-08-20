@@ -27,7 +27,7 @@ Every rule in this document carries a provenance tag. The engine stores the same
 
 An interactive web application for protected-horticulture growers (greenhouse, substrate, soil and organic media) that:
 
-1. Takes a **base water analysis**, a **crop + growing-medium selection**, and optionally a **root-zone / drain analysis**.
+1. Takes a **base water analysis**, a **crop + substrate-type selection** (the two together key every target lookup), and optionally a **root-zone / drain analysis**.
 2. Produces a **fertigation recipe** in mmol/L and µmol/L, an **A/B stock-tank fertiliser bill** in kg and g for a 1000 L, 100× tank, an **acid dosing plan**, and a **root-zone diagnosis**.
 3. Gates unsafe states (Na accumulation, pH/EC excursions, precipitation risk, infeasible acid demand) **deterministically**, before any narrative is generated.
 
@@ -310,9 +310,66 @@ Seed catalogue (all `SRC:WUR`, Table 5 p. 26; `tank_class` from Ch. 9 p. 31):
 
 `A_PREF` = chelates may go in either tank, but are placed in A when acid load is low enough to keep tank A above pH 3.5 (Ch. 9, p. 31).
 
-### 5.3 Crop library — `crops/{crop}/{medium}.yaml` `SRC:WUR` (Section B)
+### 5.3 Crop library — `crops/{crop}/{substrate}.yaml` `SRC:WUR` (Section B)
 
 Each crop page yields one record per growing medium. The three media are **not interchangeable** — target values and reference EC differ by an order of magnitude, because organic media use the **1:1.5 volume water extract** and soils the **1:2 volume water extract** (Ch. 4, p. 18), which dilute the actual root-zone solution.
+
+#### 5.3.0 Composite key: `(crop_id, substrate_type)` — mandatory
+
+> **DR-1 — Target lookups are keyed on crop AND substrate.** There is no such
+> thing as "the tomato recipe". Every target-value read — root-zone targets,
+> fertigation baseline, reference EC, Na and Cl ceilings, stage adjustments —
+> must resolve against **both** `crop_id` and `substrate_type`. A lookup that
+> falls back to another medium when a pairing is missing is worse than an
+> error: the substituted numbers look plausible and are agronomically
+> meaningless.
+
+The magnitude of the difference, for one crop (tomato, pp. 53–55):
+
+| Value | Inert Substrate | Organic Material | Soil |
+|---|---|---|---|
+| Root-zone K target | 8.0 mmol/L | 2.8 | 2.2 |
+| Root-zone Ca target | 10.0 | 3.8 | 2.5 |
+| Root-zone NO₃ target | 22.0 | 8.25 | 5.0 |
+| Root-zone EC target | 4.0 mS/cm | 1.5 | 1.4 |
+| Fertigation NO₃ | 15.0 mmol/L | 14.8 | 9.4 |
+| Fertigation Ca | 5.4 | 5.5 | 2.0 |
+| Fertigation EC | 2.6 mS/cm | 2.6 | 1.3 |
+| **Na ceiling** | **8.0 mmol/L** | **2.0** | **8.0** |
+| Measurement basis | direct solution | 1:1.5 extract | 1:2 extract |
+| Stage adjustments | 4 columns | 4 columns | **none published** |
+
+Two consequences that are easy to get wrong:
+
+1. **The sodium ceiling is substrate-specific.** Table 2 (p. 12) states 8 mmol/L
+   for tomato, but that figure is on the root-zone *solution* basis. The organic
+   page publishes 2 mmol/L because it is read from a diluted extract. Applying
+   the Table 2 value to an organic sample lets sodium reach **four times** the
+   published limit before M2 fires. The crop × substrate matrix is therefore the
+   authority for `na_max_root_zone`, and Table 2 is a fallback only.
+2. **Soil publishes no stage adjustments at all.** M5 must return an empty delta
+   set for `SOIL` rather than borrowing the inert columns — soil's buffering
+   capacity makes short-term steering through the nutrient solution far less
+   effective than in a restricted root volume.
+
+Resolution contract:
+
+```python
+SUBSTRATE_TYPES = ("INERT_SUBSTRATE", "ORGANIC_MATERIAL", "SOIL")
+DEFAULT_SUBSTRATE = "INERT_SUBSTRATE"
+
+CROP_MATRIX: dict[tuple[str, str], CropRecipe]
+
+def get_crop(crop_id: str,
+             substrate_type: str = DEFAULT_SUBSTRATE) -> CropRecipe | None:
+    """None when the pairing has no published table — never a fallback."""
+    return CROP_MATRIX.get((crop_id, substrate_type))
+
+def substrates_for(crop_id: str) -> list[str]: ...
+```
+
+An unresolvable pairing surfaces as `404` naming the substrates that *are*
+available for that crop; an unknown substrate name surfaces as `422`.
 
 ```python
 class NutrientBand(BaseModel):
@@ -331,7 +388,7 @@ class CropRecipe(BaseModel):
     crop_id: str
     crop_name: Term                 # {"en": "Tomato", "zh": "番茄"}
     botanical: str                  # "Solanum lycopersicum"
-    medium: Literal["INERT_SUBSTRATE", "ORGANIC_MATERIAL", "SOIL"]
+    substrate_type: Literal["INERT_SUBSTRATE", "ORGANIC_MATERIAL", "SOIL"]
     extract_method: Literal["direct", "1:1.5_volume", "1:2_volume"]
     ph_root_zone: tuple[float, float]
     ph_fertigation: float
@@ -502,7 +559,7 @@ class SystemConfig(BaseModel):
 class Session(BaseModel):
     id: UUID
     crop_id: str
-    medium: str
+    substrate_type: Literal["INERT_SUBSTRATE","ORGANIC_MATERIAL","SOIL"]
     stage: Literal["start","fruit_set","high_water","end_season","standard"]
     system: SystemConfig
     base_water: WaterAnalysis
@@ -663,9 +720,16 @@ Note the sign convention in the manual's Table 3: water contributions are record
 #### 6.2.1 Threshold resolution
 
 ```python
-def na_limit(crop: CropRecipe, policy: SitePolicy) -> tuple[float, Provenance]:
-    canon = crop.na_max_root_zone_mmol                       # Table 2 / crop page
-    override = policy.na_overrides.get(crop.crop_id)
+def na_limit(crop_id: str, substrate_type: str,
+             policy: SitePolicy) -> tuple[float, Provenance]:
+    # The ceiling is substrate-specific: tomato is 8 mmol/L on inert substrate
+    # but 2 on organic material, because the organic figure is read from a
+    # 1:1.5 extract. Table 2 (p.12) is stated on the solution basis and is a
+    # fallback only — using it on an organic sample would let sodium reach 4x
+    # the published limit before this gate fired.
+    crop = get_crop(crop_id, substrate_type)
+    canon = crop.na_max_root_zone_mmol if crop else NA_LIMITS_TABLE2[crop_id]
+    override = policy.na_overrides.get(crop_id)
     if override is None:
         return canon, Provenance.WUR
     return override, Provenance.PRACTICE   # UI shows both values, permanently
@@ -1269,8 +1333,10 @@ All routes are `POST` unless noted, accept and return JSON, and are versioned un
 |---|---|
 | `GET /constants` | atomic weights, oxide factors, ion charges, EC divisor |
 | `GET /fertilisers` | full catalogue; `?ion=Ca` filters by delivered ion |
-| `GET /crops` | crop list with available media |
-| `GET /crops/{crop_id}/{medium}` | full `CropRecipe` incl. adjustments |
+| `GET /crops` | crop list, each with its available `substrate_types` |
+| `GET /crops/{crop_id}/{substrate_type}` | full `CropRecipe` incl. adjustments and `extract_method` |
+| `GET /crops/{crop_id}` | same, defaulting to `INERT_SUBSTRATE` |
+| `GET /reference/substrates` | the three substrate types with bilingual labels and extraction bases |
 | `GET /reference/water-levels` | Table 1 |
 | `GET /reference/na-limits` | Table 2 |
 | `GET /reference/chelates` | Figure 3 envelopes + product refinements |
@@ -1284,10 +1350,10 @@ All routes are `POST` unless noted, accept and return JSON, and are versioned un
 | `/water/classify` | M1 | `WaterAnalysis`, `SystemConfig`, `crop_id` | level, suitability, gates |
 | `/water/acid-plan` | M1 | water, recipe targets, `acid_policy`, `hco3_buffer` | `AcidPlan` (H⁺ split, product kg/L, residual HCO₃), gates |
 | `/water/credit` | M1 | water, recipe | credited recipe + credit vector |
-| `/sodium/evaluate` | M2 | root-zone Na, crop, `SystemConfig`, `V_sys` | limit, headroom, `V_discharge`, nutrient loss, gates |
+| `/sodium/evaluate` | M2 | root-zone Na, `crop_id`, **`substrate_type`**, `SystemConfig`, `V_sys` | limit (substrate-specific), headroom, `V_discharge`, nutrient loss, gates |
 | `/irrigation/leaching` | M3 | `V_drain`, `V_irrigation`, `EC_drain`, `EC_drip` | LF, ΔEC, band, wash plan, gates |
-| `/feedback/correct` | M4 | root-zone analysis, crop, medium | reference-EC table, `Finding[]`, correction vector |
-| `/steering/plan` | M5 | crop, stage(s), `SystemConfig` | stage deltas, K:Ca and K:N ratios, dry-back target, gates |
+| `/feedback/correct` | M4 | root-zone analysis, `crop_id`, **`substrate_type`** | reference-EC table, `Finding[]`, correction vector |
+| `/steering/plan` | M5 | `crop_id`, **`substrate_type`**, stage(s), `SystemConfig` | stage deltas, K:Ca and K:N ratios, dry-back target, gates |
 | `/tanks/split` | M6 | `Dose[]`, tank volumes, acid volume | tank A / tank B bills, pH estimate, precipitation gates |
 | `/chelate/select` | M6 | `ph_root`, `SystemConfig`, `calcareous` | `FeChelatePlan`, ortho-ortho requirement, gates |
 | `/recipe/compute` | M7 | full `Session` | 7-step trace, final recipe mmol/L + µmol/L, balance report |
@@ -1516,6 +1582,42 @@ RULES
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+### 10.1.1 Tab 2 — Crop & Stage Selector: input data contract
+### 10.1.1 标签页 2 — 作物物候与目标配方：输入数据契约
+
+Tab 2 is where the `(crop_id, substrate_type)` key is chosen. Both are required
+by every downstream module, so the tab owns them for the whole session.
+
+| Field | Label (bilingual) | Type | Required | Default |
+|---|---|---|---|---|
+| `crop_id` | Crop (作物) | enum from `GET /crops` | yes | first crop |
+| `substrate_type` | **Substrate Type (基质类型)** | `INERT_SUBSTRATE` \| `ORGANIC_MATERIAL` \| `SOIL` | **yes** | `INERT_SUBSTRATE` |
+| `stages[]` | Growth Stages (生育阶段) | multi-select, stackable | no | `[]` |
+| `dry_back_intent` | Dry-back Intent (回干策略) | enum | no | `BALANCED` |
+
+Substrate option labels, rendered per §3.1:
+
+```
+INERT_SUBSTRATE   →  Inert Substrate (岩棉/惰性基质)
+ORGANIC_MATERIAL  →  Organic Material (椰糠/泥炭有机基质)
+SOIL              →  Soil (土壤栽培)
+```
+
+Behaviour bound to the control:
+
+1. Changing **either** crop or substrate re-fetches
+   `GET /crops/{crop_id}/{substrate_type}` and repaints the reference card,
+   the root-zone target table, and the header status card.
+2. The measurement basis (`extract_method_text`) is displayed beneath the
+   control, because an operator entering a lab result must know whether the
+   targets expect a direct solution sample or a diluted extract.
+3. The stage list is rebuilt from the returned matrix. For `SOIL` it is empty,
+   and the UI states that no adjustments are published rather than showing a
+   blank row.
+4. `substrate_type` is attached to **every** subsequent request from tabs 1, 3,
+   4 and 5 — M1 acid headroom, M2 sodium ceiling, M4 reference-EC comparison,
+   M5 steering, M6 tanks, M7 recipe, M8 diagnostics.
+
 ### 10.2 Cross-cutting UI rules
 
 1. **Provenance chips.** Every number carries a small tag: `WUR p.53` (blue), `derived` (grey), `site policy` (amber). Clicking opens the formula and citation.
@@ -1622,7 +1724,7 @@ H⁺ 0.5 mmol/L, nitric acid 38 % (167 g per mol N, density 1.24): `0.5 × 167 �
 | # | Question | Blocking? | Default until answered |
 |---|---|---|---|
 | Q-1 | Confirm the Na limits in D-1. The brief's tomato limit is ~2× the manual's. Is this a deliberate site policy for a salt-tolerant variety, or a transcription error? | No | Manual values (Tomato 8, Cucumber 6); brief values available as a badged override |
-| Q-2 | Which crops does v1 ship? The manual covers ~30 crops × up to 3 media ≈ 70 records, each needing visual transcription and ppm cross-check. | No | Fruiting vegetables first (cucumber, eggplant, melon, sweet pepper, tomato — pp. 40–55), then soft fruit, leafy, cut flowers, potted plants |
+| Q-2 | Which crops does v1 ship? The manual covers ~30 crops × up to 3 substrates ≈ 70 records, each needing visual transcription and ppm cross-check. | No | **Shipped: tomato, cucumber, sweet pepper × all three substrates (9 matrices, pp. 41–43, 50–55), each ppm cross-checked.** Next: eggplant and melon (pp. 44–49), then soft fruit, leafy, cut flowers, potted plants |
 | Q-3 | Are compound (NPK) fertilisers in scope? Ch. 18 (p. 95) gives examples; the manual notes they yield "a fair estimate", not an exact solution. | No | Straight fertilisers only in v1; compound support flagged as v2 |
 | Q-4 | `V_sys` (system volume, L/m²) is required for the M2 discharge calculation but is not derivable from an analysis. Source: operator input, or estimate from substrate volume × plant density? | **Yes for M2** | Operator input, required field, with a substrate-volume-based estimator offered |
 | Q-5 | Should the emergency thresholds (pH 5.2 / EC 4.5) vary by crop? Orchids and lettuce sit at very different EC bands from tomato. | No | Global defaults; per-crop override available in site policy |

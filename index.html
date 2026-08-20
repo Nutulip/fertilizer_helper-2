@@ -115,6 +115,9 @@ tailwind.config = {
         <div id="cropSummary" class="mt-1 text-sm font-semibold text-slate-700">
           Not selected (未选择)
         </div>
+        <p id="cropSubstrate" class="text-[11px] font-medium text-brand-600 leading-snug">
+          Inert Substrate (岩棉/惰性基质)
+        </p>
         <p id="cropStage" class="mt-0.5 text-[11px] text-slate-500 leading-snug">
           Stage: standard (阶段：标准)
         </p>
@@ -248,11 +251,22 @@ tailwind.config = {
       <span class="block text-slate-400">(生育阶段调整量取自作物数据库，绝不写死 — 番茄与黄瓜的坐果期调整并不相同。)</span>
     </p>
 
-    <div class="mt-5 grid grid-cols-1 lg:grid-cols-4 gap-4">
+    <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <div>
         <label class="block text-xs font-semibold text-slate-600 mb-1">Crop (作物)</label>
         <select id="cropSelect" onchange="onCropChange()"
           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"></select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Substrate Type (基质类型)</label>
+        <select id="substrateSelect" onchange="onCropChange()"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white">
+          <option value="INERT_SUBSTRATE">Inert Substrate (岩棉/惰性基质)</option>
+          <option value="ORGANIC_MATERIAL">Organic Material (椰糠/泥炭有机基质)</option>
+          <option value="SOIL">Soil (土壤栽培)</option>
+        </select>
+        <p id="extractNote" class="mt-0.5 text-[10px] text-slate-400 leading-snug"></p>
       </div>
       <div>
         <label class="block text-xs font-semibold text-slate-600 mb-1">
@@ -264,7 +278,7 @@ tailwind.config = {
           <option value="STRONGLY_GENERATIVE">Strongly generative (强生殖生长) 15–20%</option>
         </select>
       </div>
-      <div class="lg:col-span-2">
+      <div class="sm:col-span-2 lg:col-span-3">
         <label class="block text-xs font-semibold text-slate-600 mb-1">
           Growth Stages (生育阶段) — stackable (可叠加)</label>
         <div id="stageBoxes" class="flex flex-wrap gap-2"></div>
@@ -957,6 +971,7 @@ async function runModule1() {
   try {
     const r = await api('/api/v1/m1/acid-dosing', {
       crop_id: $('cropSelect').value || 'tomato',
+      substrate_type: substrateType(),
       base_water_mmol: macro,
       base_water_micro_umol: micro,
       base_water_ec: ec,
@@ -1005,28 +1020,47 @@ async function loadCrops() {
   await onCropChange();
 }
 
+/** The substrate currently selected in Tab 2. Every crop-aware call needs it. */
+function substrateType() {
+  return $('substrateSelect') ? $('substrateSelect').value : 'INERT_SUBSTRATE';
+}
+
 async function onCropChange() {
   const id = $('cropSelect').value;
   if (!id) return;
-  state.crop = await api('/api/v1/crops/' + encodeURIComponent(id));
+  const sub = substrateType();
+  // Target values are published per crop AND per substrate, so both key the lookup.
+  state.crop = await api('/api/v1/crops/' + encodeURIComponent(id)
+                         + '/' + encodeURIComponent(sub));
   const c = state.crop;
 
+  $('extractNote').textContent = c.extract_method_text || '';
+
   $('cropSummary').textContent = c.name_text;
+  $('cropSubstrate').textContent = c.substrate_type_text;
   $('cropStage').textContent =
     `EC target ${c.ec_root_zone_ms_cm} · Na ≤ ${c.na_max_root_zone_mmol_l} mmol/L (目标电导率 / 钠上限)`;
 
-  $('stageBoxes').innerHTML = c.adjustments.map(a => `
-    <label class="inline-flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition">
-      <input type="checkbox" class="stage-box rounded border-slate-300 text-brand-600 focus:ring-brand-600"
-        value="${esc(a.stage)}">
-      ${esc(a.label_text)}
-    </label>`).join('');
+  // Soil pages publish no adjustment columns, so say so rather than showing
+  // an unexplained empty row.
+  $('stageBoxes').innerHTML = c.adjustments.length
+    ? c.adjustments.map(a => `
+        <label class="inline-flex items-center gap-1.5 text-xs bg-slate-100 hover:bg-slate-200 rounded-lg px-2.5 py-1.5 cursor-pointer transition">
+          <input type="checkbox" class="stage-box rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+            value="${esc(a.stage)}">
+          ${esc(a.label_text)}
+        </label>`).join('')
+    : `<p class="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+         No stage adjustments are published for this substrate.
+         <span class="text-slate-400">(该基质类型未发布生育阶段调整量。)</span>
+       </p>`;
 
   const targets = Object.entries(c.root_zone_targets);
   $('cropDetail').innerHTML = card('Crop Reference Values', '作物参考值', `
     ${kv([
       ['Botanical Name (学名)', `<em class="font-normal">${esc(c.botanical)}</em>`],
-      ['Growing Medium (栽培基质)', esc(c.medium_text)],
+      ['Substrate Type (基质类型)', esc(c.substrate_type_text)],
+      ['Measurement Basis (测定基准)', esc(c.extract_method_text)],
       ['Root Zone pH (根际 pH)', `${c.ph_root_zone[0]} – ${c.ph_root_zone[1]}`],
       ['Fertigation pH (滴灌 pH)', String(c.ph_fertigation)],
       ['Root Zone EC (根际电导率)', `${c.ec_root_zone_ms_cm} mS/cm`],
@@ -1077,6 +1111,7 @@ async function runModule5() {
   try {
     const r = await api('/api/v1/m5/steering', {
       crop_id: $('cropSelect').value,
+      substrate_type: substrateType(),
       stages,
       dry_back_intent: $('dryBack').value,
     });
@@ -1172,7 +1207,8 @@ async function runEmergency() {
   }
   busy('out3', 'Checking emergency gate… (正在检查紧急闸门…)');
   try {
-    const p = await api('/api/v1/m8/emergency', { ph, ec, crop_id: $('cropSelect').value });
+    const p = await api('/api/v1/m8/emergency', { ph, ec,
+      crop_id: $('cropSelect').value, substrate_type: substrateType() });
     state.emergency = p;
     $('out3').innerHTML = renderEmergency(p);
     liveStatus();
@@ -1194,6 +1230,7 @@ async function runModule4() {
   try {
     const r = await api('/api/v1/m8/diagnostics', {
       crop_id: $('cropSelect').value,
+      substrate_type: substrateType(),
       root_zone_mmol: macro,
       root_zone_micro_umol: micro,
       root_zone_ec: ec,
@@ -1296,6 +1333,7 @@ async function runModule2() {
   try {
     const r = await api('/api/v1/m2/sodium', {
       crop_id: $('cropSelect').value,
+      substrate_type: substrateType(),
       na_root_zone_mmol: na,
       na_base_water_mmol: bwNa || 0,
       system_volume_l_m2: sys,
@@ -1446,6 +1484,7 @@ async function runFullPipeline() {
 
   const body = {
     crop_id: $('cropSelect').value,
+    substrate_type: substrateType(),
     stages: selectedStages(),
     base_water_mmol: bwMacro,
     base_water_micro_umol: bwMicro,

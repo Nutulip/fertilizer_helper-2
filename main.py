@@ -32,9 +32,11 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 from constants import (
-    APN_UMOL_L, ATOMIC_WEIGHTS, CROPS, DEFAULT_POLICY, ELEMENTAL_TO_OXIDE,
-    FERTILISERS, FE_CHELATE_BANDS, NA_LIMITS_MMOL_L, OXIDE_TO_ELEMENTAL,
-    WATER_QUALITY_LEVELS, SitePolicy, bi,
+    APN_UMOL_L, ATOMIC_WEIGHTS, CROP_MATRIX, DEFAULT_POLICY, DEFAULT_SUBSTRATE,
+    ELEMENTAL_TO_OXIDE, EXTRACT_METHOD_LABELS, EXTRACT_METHODS, FERTILISERS,
+    FE_CHELATE_BANDS,
+    NA_LIMITS_MMOL_L, OXIDE_TO_ELEMENTAL, SUBSTRATE_LABELS, SUBSTRATE_TYPES,
+    WATER_QUALITY_LEVELS, SitePolicy, bi, crop_ids, get_crop, substrates_for,
 )
 from engine import (
     DRY_BACK_TARGETS, Gate, LF_BANDS, acid_gates, allocate_fertilisers,
@@ -125,11 +127,27 @@ def _policy(overrides: dict | None) -> SitePolicy:
     return p
 
 
-def _crop_or_400(crop_id: str):
-    crop = CROPS.get(crop_id)
+def _crop_or_400(crop_id: str, substrate_type: str = DEFAULT_SUBSTRATE):
+    """
+    Resolve a crop x substrate matrix, or fail loudly.
+
+    Falling back to another substrate's table would be worse than an error:
+    the three media are measured on different bases, so a wrong-medium lookup
+    produces numbers that look plausible and are agronomically meaningless.
+    """
+    if substrate_type not in SUBSTRATE_TYPES:
+        raise _http_error(422, f"Unknown substrate_type '{substrate_type}'. "
+                               f"Available: {', '.join(SUBSTRATE_TYPES)}")
+    crop = get_crop(crop_id, substrate_type)
     if crop is None:
-        raise _http_error(404, f"Unknown crop '{crop_id}'. "
-                               f"Available: {', '.join(sorted(CROPS))}")
+        if crop_id not in crop_ids():
+            raise _http_error(404, f"Unknown crop '{crop_id}'. "
+                                   f"Available: {', '.join(crop_ids())}")
+        raise _http_error(
+            404,
+            f"No published matrix for crop '{crop_id}' on substrate "
+            f"'{substrate_type}'. Available for this crop: "
+            f"{', '.join(substrates_for(crop_id))}")
     return crop
 
 
@@ -175,6 +193,9 @@ if FASTAPI_AVAILABLE:
 
     class AcidRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         base_water_mmol: dict[str, float] = Field(default_factory=dict)
         base_water_micro_umol: dict[str, float] = Field(default_factory=dict)
         base_water_ec: float = 0.0
@@ -186,6 +207,9 @@ if FASTAPI_AVAILABLE:
 
     class SodiumRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         na_root_zone_mmol: float
         na_base_water_mmol: float = 0.0
         system_volume_l_m2: float = 0.0
@@ -201,6 +225,9 @@ if FASTAPI_AVAILABLE:
 
     class CorrectionRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         root_zone_mmol: dict[str, float]
         root_zone_micro_umol: dict[str, float] = Field(default_factory=dict)
         root_zone_ec: float
@@ -209,6 +236,9 @@ if FASTAPI_AVAILABLE:
 
     class SteeringRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         stages: list[str] = Field(default_factory=lambda: ["fruit_set"])
         dry_back_intent: str = "BALANCED"
         na_ratio: float | None = None
@@ -216,6 +246,9 @@ if FASTAPI_AVAILABLE:
 
     class TankRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         stages: list[str] = Field(default_factory=list)
         ph_root_zone: float = 5.5
         irrigation_type: str = "DRIP"
@@ -228,7 +261,9 @@ if FASTAPI_AVAILABLE:
 
     class ChelateRequest(BaseModel):
         ph_root_zone: float
-        medium: str = "INERT_SUBSTRATE"
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         irrigation_type: str = "DRIP"
         calcareous_soil: bool = False
         disinfection: str = "NONE"
@@ -237,6 +272,9 @@ if FASTAPI_AVAILABLE:
 
     class BaseWaterRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         base_water_mmol: dict[str, float] = Field(default_factory=dict)
         drain_mmol: dict[str, float] | None = None
         drain_reuse_fraction: float = 0.0
@@ -246,10 +284,16 @@ if FASTAPI_AVAILABLE:
         ph: float
         ec: float
         crop_id: str | None = None
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         policy: dict | None = None
 
     class SessionRequest(BaseModel):
         crop_id: str
+        substrate_type: str = Field(
+            default="INERT_SUBSTRATE",
+            description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
         stages: list[str] = Field(default_factory=list)
         target_drip_ec: float | None = None
         base_water_mmol: dict[str, float] = Field(default_factory=dict)
@@ -331,7 +375,8 @@ if FASTAPI_AVAILABLE:
         return {
             "status": "ok",
             "status_text": bi("Service healthy", "服务正常"),
-            "crops_loaded": len(CROPS),
+            "crops_loaded": len(crop_ids()),
+            "matrices_loaded": len(CROP_MATRIX),
             "fertilisers_loaded": len(FERTILISERS),
         }
 
@@ -401,24 +446,67 @@ if FASTAPI_AVAILABLE:
                 "apn_text": bi("Average Plant Need", "植物平均需求"),
                 "source": "Table 6, p. 34"}
 
+    @app.get("/api/v1/reference/substrates")
+    def get_substrates() -> dict:
+        return {
+            "substrate_types": [
+                {"value": s,
+                 "label": s.replace("_", " ").title(),
+                 "label_text": SUBSTRATE_LABELS[s],
+                 "extract_method": EXTRACT_METHODS[s],
+                 "extract_method_text": EXTRACT_METHOD_LABELS[EXTRACT_METHODS[s]]}
+                for s in SUBSTRATE_TYPES],
+            "default": DEFAULT_SUBSTRATE,
+            "note_text": bi(
+                "Target values are published per crop AND per substrate. "
+                "Organic and soil targets come from diluted water extracts, so "
+                "their numbers are not comparable with inert-substrate values.",
+                "目标值按作物与基质类型分别发布。有机基质与土壤的目标值来自稀释水浸提，"
+                "其数值不可与惰性基质的数值直接比较。"),
+            "source": "Section B; extraction methods Ch. 4, p. 18",
+        }
+
     @app.get("/api/v1/crops")
     def list_crops() -> dict:
-        return {"crops": [
-            {"crop_id": c.crop_id, "name": c.name_en, "name_text": c.name,
-             "botanical": c.botanical, "medium": c.medium,
-             "medium_text": MEDIUM_TEXT[c.medium],
-             "ec_fertigation": c.ec_fertigation,
-             "na_max_root_zone_mmol_l": c.na_max_root_zone,
-             "source_page": c.source_page}
-            for c in CROPS.values()]}
+        out = []
+        for cid in crop_ids():
+            subs = substrates_for(cid)
+            first = get_crop(cid, subs[0])
+            out.append({
+                "crop_id": cid,
+                "name": first.name_en,
+                "name_text": first.name,
+                "botanical": first.botanical,
+                "substrate_types": subs,
+                "substrate_types_text": [SUBSTRATE_LABELS[s] for s in subs],
+                "matrices": [
+                    {"substrate_type": s,
+                     "substrate_type_text": SUBSTRATE_LABELS[s],
+                     "ec_fertigation": get_crop(cid, s).ec_fertigation,
+                     "ec_root_zone": get_crop(cid, s).ec_root_zone,
+                     "na_max_root_zone_mmol_l": get_crop(cid, s).na_max_root_zone,
+                     "source_page": get_crop(cid, s).source_page}
+                    for s in subs],
+            })
+        return {"crops": out}
 
     @app.get("/api/v1/crops/{crop_id}")
-    def get_crop(crop_id: str) -> dict:
-        c = _crop_or_400(crop_id)
+    def get_crop_default(crop_id: str) -> dict:
+        """Defaults to inert substrate for backwards compatibility."""
+        return get_crop_detail(crop_id, DEFAULT_SUBSTRATE)
+
+    @app.get("/api/v1/crops/{crop_id}/{substrate_type}")
+    def get_crop_detail(crop_id: str, substrate_type: str) -> dict:
+        c = _crop_or_400(crop_id, substrate_type)
         return {
             "crop_id": c.crop_id,
             "name": c.name_en, "name_text": c.name,
             "botanical": c.botanical,
+            "substrate_type": c.medium,
+            "substrate_type_text": SUBSTRATE_LABELS[c.medium],
+            "available_substrate_types": substrates_for(c.crop_id),
+            "extract_method": c.extract_method,
+            "extract_method_text": EXTRACT_METHOD_LABELS[c.extract_method],
             "medium": c.medium, "medium_text": MEDIUM_TEXT[c.medium],
             "ph_root_zone": list(c.ph_root_zone),
             "ph_fertigation": c.ph_fertigation,
@@ -464,7 +552,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m1/acid-dosing")
     def m1_acid(req: AcidRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
         water = req.base_water_mmol
 
@@ -524,11 +612,12 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m2/sodium")
     def m2_sodium(req: SodiumRequest) -> dict:
-        _crop_or_400(req.crop_id)
+        _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
         r = evaluate_sodium(req.crop_id, req.na_root_zone_mmol,
                             req.na_base_water_mmol, req.system_volume_l_m2,
-                            req.drain_composition_mmol, pol)
+                            req.drain_composition_mmol, pol,
+                            substrate_type=req.substrate_type)
         gates = sodium_gates(r, req.crop_id)
         data = {
             "na_root_zone_mmol_l": round(r.na_current, 3),
@@ -593,7 +682,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m4/correction")
     def m4_correction(req: CorrectionRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
         try:
             findings, meta = evaluate_corrections(
@@ -657,7 +746,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m5/steering")
     def m5_steering(req: SteeringRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         r = apply_stage_adjustments(crop, req.stages, req.dry_back_intent)
         gates = steering_gates(r, crop, req.na_ratio, req.wash_active)
         lo, hi, intent_en, intent_zh = DRY_BACK_TARGETS.get(
@@ -697,7 +786,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m6/chelate")
     def m6_chelate(req: ChelateRequest) -> dict:
-        plan = select_fe_chelate(req.ph_root_zone, req.medium,
+        plan = select_fe_chelate(req.ph_root_zone, req.substrate_type,
                                  req.irrigation_type, req.calcareous_soil)
         gates = chelate_gates(plan, req.disinfection, req.recirculating,
                               req.metal_sulphates_used)
@@ -723,7 +812,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m6/tanks")
     def m6_tanks(req: TankRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
         steer = apply_stage_adjustments(crop, req.stages)
         fe_plan = select_fe_chelate(req.ph_root_zone, crop.medium,
@@ -780,7 +869,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m7/base-water")
     def m7_base_water(req: BaseWaterRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         recipe = dict(crop.fertigation)
 
         target_ec = req.target_drip_ec or crop.ec_fertigation
@@ -839,7 +928,7 @@ if FASTAPI_AVAILABLE:
     @app.post("/api/v1/m8/emergency")
     def m8_emergency(req: EmergencyRequest) -> dict:
         pol = _policy(req.policy)
-        crop = CROPS.get(req.crop_id) if req.crop_id else None
+        crop = get_crop(req.crop_id, req.substrate_type) if req.crop_id else None
         payload = emergency_check(req.ph, req.ec, crop, pol)
         if payload is not None:
             return payload
@@ -860,7 +949,7 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/api/v1/m8/diagnostics")
     def m8_diagnostics(req: CorrectionRequest) -> dict:
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
         emergency = emergency_check(req.root_zone_ph, req.root_zone_ec, crop, pol)
         if emergency:
@@ -875,7 +964,7 @@ if FASTAPI_AVAILABLE:
         Full pipeline in gate-precedence order. A BLOCKING gate short-circuits
         everything downstream and suppresses the recipe.
         """
-        crop = _crop_or_400(req.crop_id)
+        crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
 
         # --- M8 emergency pre-check, evaluated FIRST ---
@@ -915,7 +1004,8 @@ if FASTAPI_AVAILABLE:
         if req.root_zone_mmol and "Na" in req.root_zone_mmol:
             na = evaluate_sodium(req.crop_id, req.root_zone_mmol["Na"],
                                  water.get("Na", 0.0), req.system_volume_l_m2,
-                                 req.drain_mmol, pol)
+                                 req.drain_mmol, pol,
+                                 substrate_type=req.substrate_type)
             gates += sodium_gates(na, req.crop_id)
             na_ratio = na.ratio
             modules["M2"] = {
@@ -1078,7 +1168,7 @@ class TestFruitSetKNO3Dosing(unittest.TestCase):
     def test_fruit_set_delta_is_one_kno3(self):
         for crop_id in ("cucumber", "sweet_pepper"):
             with self.subTest(crop=crop_id):
-                steer = apply_stage_adjustments(CROPS[crop_id], ["fruit_set"])
+                steer = apply_stage_adjustments(get_crop(crop_id), ["fruit_set"])
                 self.assertAlmostEqual(steer.deltas["K"], 1.0, places=6)
                 self.assertAlmostEqual(steer.deltas["NO3"], 1.0, places=6)
 
@@ -1190,7 +1280,7 @@ class TestGV2TomatoTankRecipe(unittest.TestCase):
     """Golden vector 2 — the printed tomato A+B recipe, p. 53."""
 
     def setUp(self):
-        crop = CROPS["tomato"]
+        crop = get_crop("tomato")
         self.doses, self.residual = allocate_fertilisers(
             dict(crop.fertigation), dict(crop.micro_fertigation))
         self.by_id: dict[str, float] = {}
@@ -1240,7 +1330,7 @@ class TestGV2TomatoTankRecipe(unittest.TestCase):
                 if ion == "H":
                     continue
                 delivered[ion] = delivered.get(ion, 0.0) + n * d.amount_mmol_l
-        for ion, target in CROPS["tomato"].fertigation.items():
+        for ion, target in get_crop("tomato").fertigation.items():
             with self.subTest(ion=ion):
                 self.assertAlmostEqual(delivered.get(ion, 0.0), target, delta=0.05)
 
@@ -1359,7 +1449,7 @@ class TestModule2Sodium(unittest.TestCase):
 
     def test_site_override_is_flagged_as_practice(self):
         pol = SitePolicy(na_overrides={"tomato": 15.0})
-        limit, source = na_limit_for("tomato", pol)
+        limit, source = na_limit_for("tomato", policy=pol)
         self.assertEqual(limit, 15.0)
         self.assertIn("PRACTICE", source)
 
@@ -1419,7 +1509,7 @@ class TestModule4Correction(unittest.TestCase):
         self.assertAlmostEqual(step(0.70), -0.50)
 
     def test_reference_ec_normalisation(self):
-        crop = CROPS["tomato"]
+        crop = get_crop("tomato")
         analysis = {"K": 7.2, "Na": 2.7, "Ca": 11.4, "Mg": 6.0,
                     "NO3": 22.1, "Cl": 2.8, "S": 7.9, "P": 2.8, "NH4": 0.1}
         ref, meta = to_reference_ec(analysis, 4.1, crop.ec_root_zone, crop)
@@ -1430,7 +1520,7 @@ class TestModule4Correction(unittest.TestCase):
         self.assertLess(ref["K"], analysis["K"])           # scaled down
 
     def test_reference_ec_rejects_sodium_dominated_sample(self):
-        crop = CROPS["tomato"]
+        crop = get_crop("tomato")
         with self.assertRaises(ValueError):
             to_reference_ec({"Na": 45.0, "K": 1.0}, 4.0, crop.ec_root_zone, crop)
 
@@ -1438,29 +1528,29 @@ class TestModule4Correction(unittest.TestCase):
 class TestModule5Steering(unittest.TestCase):
 
     def test_tomato_fruit_set_differs_from_cucumber(self):
-        t = apply_stage_adjustments(CROPS["tomato"], ["fruit_set"])
+        t = apply_stage_adjustments(get_crop("tomato"), ["fruit_set"])
         self.assertAlmostEqual(t.deltas["K"], 1.5)
         self.assertAlmostEqual(t.deltas["Ca"], -0.5)
         self.assertAlmostEqual(t.deltas["Mg"], -0.25)
         self.assertNotIn("NO3", t.deltas)
 
     def test_k_ca_ratio_rises_at_fruit_set(self):
-        base = apply_stage_adjustments(CROPS["tomato"], [])
-        fruit = apply_stage_adjustments(CROPS["tomato"], ["fruit_set"])
+        base = apply_stage_adjustments(get_crop("tomato"), [])
+        fruit = apply_stage_adjustments(get_crop("tomato"), ["fruit_set"])
         self.assertGreater(fruit.k_ca_ratio, base.k_ca_ratio)
 
     def test_stages_stack(self):
-        r = apply_stage_adjustments(CROPS["tomato"], ["fruit_set", "high_water"])
+        r = apply_stage_adjustments(get_crop("tomato"), ["fruit_set", "high_water"])
         self.assertAlmostEqual(r.deltas["K"], 0.5)      # +1.5 then -1.0
         self.assertAlmostEqual(r.deltas["Ca"], 0.0)     # -0.5 then +0.5
 
     def test_dry_back_targets(self):
-        r = apply_stage_adjustments(CROPS["tomato"], [], "GENERATIVE")
+        r = apply_stage_adjustments(get_crop("tomato"), [], "GENERATIVE")
         self.assertEqual((r.dry_back_min, r.dry_back_max), (12.0, 15.0))
 
     def test_generative_dryback_downgraded_by_sodium(self):
-        r = apply_stage_adjustments(CROPS["tomato"], [], "GENERATIVE")
-        gates = steering_gates(r, CROPS["tomato"], na_ratio=0.9)
+        r = apply_stage_adjustments(get_crop("tomato"), [], "GENERATIVE")
+        gates = steering_gates(r, get_crop("tomato"), na_ratio=0.9)
         self.assertTrue(any(g.gid == "G-DRYBACK-NA" for g in gates))
 
     def test_ammonium_gate_sees_the_corrected_recipe(self):
@@ -1474,22 +1564,22 @@ class TestModule5Steering(unittest.TestCase):
         corrected = {"NH4": 1.656, "NO3": 17.0}
         self.assertTrue(any(g.gid == "G-NH4-CEILING"
                             for g in ammonium_gates(corrected)))
-        stage_only = apply_stage_adjustments(CROPS["cucumber"], ["fruit_set"])
+        stage_only = apply_stage_adjustments(get_crop("cucumber"), ["fruit_set"])
         self.assertFalse(any(g.gid == "G-NH4-CEILING"
-                             for g in steering_gates(stage_only, CROPS["cucumber"])),
+                             for g in steering_gates(stage_only, get_crop("cucumber"))),
                          "uncorrected recipe is within the ceiling")
 
     def test_ammonium_ceiling_enforced(self):
-        r = apply_stage_adjustments(CROPS["tomato"], [])
+        r = apply_stage_adjustments(get_crop("tomato"), [])
         r.macro_after["NH4"] = 2.0
-        gates = steering_gates(r, CROPS["tomato"])
+        gates = steering_gates(r, get_crop("tomato"))
         self.assertTrue(any(g.gid == "G-NH4-CEILING" for g in gates))
 
 
 class TestModule6Tanks(unittest.TestCase):
 
     def setUp(self):
-        crop = CROPS["tomato"]
+        crop = get_crop("tomato")
         self.doses, _ = allocate_fertilisers(dict(crop.fertigation),
                                              dict(crop.micro_fertigation))
         self.split = split_ab_tanks(self.doses)
@@ -1587,7 +1677,7 @@ class TestModule8Emergency(unittest.TestCase):
         self.assertIsNone(emergency_check(5.8, 2.6))
 
     def test_payload_is_bilingual_and_hardcoded(self):
-        p = emergency_check(5.0, 5.0, CROPS["tomato"])
+        p = emergency_check(5.0, 5.0, get_crop("tomato"))
         self.assertIn("紧急冲洗指令", p["title_text"])
         self.assertEqual(len(p["instructions"]), 6)
         for step in p["instructions"]:
@@ -1598,6 +1688,107 @@ class TestModule8Emergency(unittest.TestCase):
         p = emergency_check(5.0, 5.0)
         self.assertIn("pH", p["reason"])
         self.assertIn("EC", p["reason"])
+
+
+class TestSubstrateMatrix(unittest.TestCase):
+    """Target values are keyed on crop AND substrate (Section B)."""
+
+    def test_every_crop_has_all_three_substrates(self):
+        for cid in crop_ids():
+            with self.subTest(crop=cid):
+                self.assertEqual(substrates_for(cid), list(SUBSTRATE_TYPES))
+
+    def test_targets_differ_by_substrate(self):
+        """Tomato root-zone K: 8.0 inert, 2.8 organic, 2.2 soil (pp. 53-55)."""
+        self.assertAlmostEqual(
+            get_crop("tomato", "INERT_SUBSTRATE").root_zone_targets["K"], 8.0)
+        self.assertAlmostEqual(
+            get_crop("tomato", "ORGANIC_MATERIAL").root_zone_targets["K"], 2.8)
+        self.assertAlmostEqual(
+            get_crop("tomato", "SOIL").root_zone_targets["K"], 2.2)
+
+    def test_fertigation_differs_by_substrate(self):
+        """Baselines differ too, not only the root-zone targets."""
+        inert = get_crop("tomato", "INERT_SUBSTRATE").fertigation
+        organic = get_crop("tomato", "ORGANIC_MATERIAL").fertigation
+        soil = get_crop("tomato", "SOIL").fertigation
+        self.assertAlmostEqual(inert["NO3"], 15.0)
+        self.assertAlmostEqual(organic["NO3"], 14.8)
+        self.assertAlmostEqual(soil["NO3"], 9.4)
+        self.assertAlmostEqual(inert["Ca"], 5.4)
+        self.assertAlmostEqual(organic["Ca"], 5.5)
+        self.assertAlmostEqual(soil["Ca"], 2.0)
+
+    def test_sodium_ceiling_is_substrate_specific(self):
+        """
+        Regression guard. Tomato tolerates 8 mmol/L Na on inert substrate but
+        only 2 on organic material, because the organic figure is read from a
+        1:1.5 extract. Using the inert ceiling on an organic sample would let
+        sodium reach 4x the published limit before any gate fired.
+        """
+        self.assertEqual(na_limit_for("tomato", "INERT_SUBSTRATE")[0], 8.0)
+        self.assertEqual(na_limit_for("tomato", "ORGANIC_MATERIAL")[0], 2.0)
+        self.assertEqual(na_limit_for("tomato", "SOIL")[0], 8.0)
+        self.assertEqual(na_limit_for("cucumber", "ORGANIC_MATERIAL")[0], 2.0)
+        self.assertEqual(na_limit_for("cucumber", "SOIL")[0], 3.0)
+
+    def test_sodium_gate_fires_on_organic_but_not_inert(self):
+        """Na 3.0 mmol/L is safe on inert tomato and over the limit on organic."""
+        inert = evaluate_sodium("tomato", 3.0, 0.5, 20.0,
+                                substrate_type="INERT_SUBSTRATE")
+        organic = evaluate_sodium("tomato", 3.0, 0.5, 20.0,
+                                  substrate_type="ORGANIC_MATERIAL")
+        self.assertEqual(inert.status, "SAFE")
+        self.assertEqual(organic.status, "EXCEEDED")
+        self.assertGreater(organic.discharge_volume_l_m2, 0.0)
+
+    def test_extract_method_recorded(self):
+        self.assertEqual(get_crop("tomato", "INERT_SUBSTRATE").extract_method,
+                         "direct")
+        self.assertEqual(get_crop("tomato", "ORGANIC_MATERIAL").extract_method,
+                         "1:1.5_volume")
+        self.assertEqual(get_crop("tomato", "SOIL").extract_method,
+                         "1:2_volume")
+
+    def test_soil_publishes_no_stage_adjustments(self):
+        for cid in crop_ids():
+            with self.subTest(crop=cid):
+                self.assertEqual(get_crop(cid, "SOIL").adjustments, ())
+                self.assertTrue(get_crop(cid, "ORGANIC_MATERIAL").adjustments)
+
+    def test_organic_fruit_set_matches_inert(self):
+        """Cucumber fruit set is +1 K / +1 NO3 on both inert and organic."""
+        for medium in ("INERT_SUBSTRATE", "ORGANIC_MATERIAL"):
+            with self.subTest(substrate=medium):
+                s = apply_stage_adjustments(get_crop("cucumber", medium),
+                                            ["fruit_set"])
+                self.assertAlmostEqual(s.deltas["K"], 1.0)
+                self.assertAlmostEqual(s.deltas["NO3"], 1.0)
+
+    def test_unknown_pairing_is_rejected(self):
+        self.assertIsNone(get_crop("tomato", "AEROPONICS"))
+        self.assertIsNone(get_crop("banana", "SOIL"))
+
+    def test_ppm_cross_check_all_matrices(self):
+        """
+        mmol/L * atomic weight must reproduce the printed ppm column. This is
+        the transcription guard for every crop x substrate record.
+        """
+        expected = {
+            ("tomato", "ORGANIC_MATERIAL"): {"K": 364, "Ca": 220, "NO3": 207},
+            ("tomato", "SOIL"): {"K": 196, "Ca": 80, "NO3": 132},
+            ("cucumber", "ORGANIC_MATERIAL"): {"K": 313, "Ca": 180, "NO3": 235},
+            ("cucumber", "SOIL"): {"K": 137, "Ca": 80, "NO3": 111},
+            ("sweet_pepper", "ORGANIC_MATERIAL"): {"K": 242, "Ca": 210, "NO3": 224},
+            ("sweet_pepper", "SOIL"): {"K": 156, "Ca": 80, "NO3": 118},
+        }
+        for (cid, medium), ions in expected.items():
+            crop = get_crop(cid, medium)
+            for ion, printed_ppm in ions.items():
+                with self.subTest(crop=cid, substrate=medium, ion=ion):
+                    self.assertAlmostEqual(
+                        mmol_to_ppm(crop.fertigation[ion], ion),
+                        printed_ppm, delta=1.0)
 
 
 class TestBilingualContract(unittest.TestCase):
@@ -1619,7 +1810,7 @@ class TestBilingualContract(unittest.TestCase):
             self.assertRegex(d["message_text"], r"^.+ \(.+\)$")
 
     def test_crop_names_are_bilingual(self):
-        for crop in CROPS.values():
+        for crop in CROP_MATRIX.values():
             self.assertRegex(crop.name, r"^.+ \(.+\)$")
 
     def test_envelope_has_bilingual_headers(self):
