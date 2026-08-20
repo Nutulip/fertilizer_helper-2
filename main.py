@@ -40,6 +40,7 @@ from constants import (
 )
 from engine import (
     DRY_BACK_TARGETS, Gate, LF_BANDS, acid_gates, allocate_fertilisers,
+    acid_molarity_mol_per_l, acid_volume_direct_l,
     apply_corrections, apply_stage_adjustments, balance_report,
     base_water_excess, base_water_excess_gates,
     cation_balance_pct, chelate_gates, classify_water, convert_analysis_to_mmol,
@@ -595,10 +596,32 @@ if FASTAPI_AVAILABLE:
                               else bi("Acid plan infeasible", "加酸方案不可行")),
             "no3_contributed_mmol_l": round(plan.no3_added, 3),
             "p_contributed_mmol_l": round(plan.p_added, 3),
-            "nitric_acid_38pct_l_per_1000l": round(plan.nitric_l, 2),
+            # Two different questions, two different answers. Reporting only
+            # one of these invites a 100x dosing error, so both are always
+            # returned with the basis spelled out in the key name.
+            "nitric_acid_38pct_l_per_stock_tank": round(plan.nitric_l, 2),
+            "nitric_acid_38pct_l_per_1000l_working": round(plan.nitric_l_direct, 3),
             "nitric_acid_38pct_text": bi("Nitric acid 38%", "硝酸 38%"),
-            "phosphoric_acid_59pct_l_per_1000l": round(plan.phosphoric_l, 2),
+            "phosphoric_acid_59pct_l_per_stock_tank": round(plan.phosphoric_l, 2),
+            "phosphoric_acid_59pct_l_per_1000l_working": round(plan.phosphoric_l_direct, 3),
             "phosphoric_acid_59pct_text": bi("Phosphoric acid 59%", "磷酸 59%"),
+            "stock_tank_basis_text": bi(
+                f"Per {pol.tank_volume_l:.0f} L stock tank at "
+                f"{pol.concentration_factor:.0f}x concentration",
+                f"每 {pol.tank_volume_l:.0f} L 母液罐（{pol.concentration_factor:.0f} 倍浓缩）用量"),
+            "working_solution_basis_text": bi(
+                f"Per {plan.direct_basis_volume_l:.0f} L of irrigation water at "
+                f"working strength (direct injection)",
+                f"每 {plan.direct_basis_volume_l:.0f} L 工作液（直接注入）用量"),
+            "dosing_basis_warning_text": bi(
+                f"These two figures differ by the {pol.concentration_factor:.0f}x "
+                f"concentration factor. Use the stock-tank value only when "
+                f"filling an A/B tank; use the working-solution value when "
+                f"dosing straight into irrigation water.",
+                f"两个数值相差 {pol.concentration_factor:.0f} 倍浓缩系数。"
+                f"配制 A/B 母液罐时用母液罐数值；直接注入灌溉水时用工作液数值。"),
+            "acid_molarity_mol_per_l": round(
+                acid_molarity_mol_per_l(FERTILISERS["hno3_38"]), 4),
             "reaction": "Ca2+ + 2HCO3- + 2HNO3 <-> Ca2+ + 2CO2 + 2H2O + 2NO3-",
             "base_water_fe_credited": False,
             "base_water_fe_credited_text": bi(
@@ -996,7 +1019,8 @@ if FASTAPI_AVAILABLE:
                                            f"水质 {level} 级"),
             "h_required_mmol_l": round(acid_plan.h_required, 3),
             "hco3_residual_mmol_l": round(acid_plan.hco3_residual, 3),
-            "nitric_acid_l_per_1000l": round(acid_plan.nitric_l, 2),
+            "nitric_acid_l_per_stock_tank": round(acid_plan.nitric_l, 2),
+            "nitric_acid_l_per_1000l_working": round(acid_plan.nitric_l_direct, 3),
         }
 
         # --- M2 sodium ---
@@ -1345,6 +1369,71 @@ class TestGV3AcidVolume(unittest.TestCase):
         self.assertAlmostEqual(plan.hco3_residual, 0.5, places=6)
         self.assertAlmostEqual(plan.nitric_kg, 8.35, places=2)
         self.assertAlmostEqual(plan.nitric_l, 6.73, delta=0.35)  # report: 6.4 L
+
+
+class TestAcidDosingBasis(unittest.TestCase):
+    """
+    Two legitimate answers to two different questions. Conflating them is a
+    100x dosing error, so both bases are pinned here.
+    """
+
+    def test_molarity_of_38pct_nitric(self):
+        """1240 g/L / 167 g per mol H+ = 7.425 mol/L (Table 5, p. 26)."""
+        m = acid_molarity_mol_per_l(FERTILISERS["hno3_38"])
+        self.assertAlmostEqual(m, 7.4251, places=3)
+
+    def test_molarity_agrees_with_mass_fraction_derivation(self):
+        """
+        Deriving from mass fraction instead:
+            1.23 g/mL x 1000 x 0.38 / 63.01 = 7.418 mol/L
+        Agrees with the catalogue value to 0.1%; the gap is only the density
+        constant (real 38% HNO3 is 1.229-1.234 g/mL at 20 C).
+        """
+        from_fraction = (1.23 * 1000 * 0.38) / 63.01
+        from_catalogue = acid_molarity_mol_per_l(FERTILISERS["hno3_38"])
+        self.assertLess(abs(from_fraction - from_catalogue) / from_catalogue, 0.002)
+
+    def test_direct_dose_into_1000l_working_solution(self):
+        """2.0 mmol/L H+ into 1000 L of irrigation water needs ~0.270 L."""
+        v = acid_volume_direct_l(2.0, FERTILISERS["hno3_38"], 1000.0)
+        self.assertAlmostEqual(v, 0.270, delta=0.002)
+
+    def test_direct_dose_scales_with_volume(self):
+        f = FERTILISERS["hno3_38"]
+        self.assertAlmostEqual(acid_volume_direct_l(2.0, f, 2000.0),
+                               2 * acid_volume_direct_l(2.0, f, 1000.0), places=9)
+        self.assertAlmostEqual(acid_volume_direct_l(0.0, f, 1000.0), 0.0)
+
+    def test_stock_tank_is_exactly_cf_times_the_direct_dose(self):
+        """
+        The stock-tank figure is the working-solution figure multiplied by the
+        concentration factor. One 1000 L tank at 100x treats 100,000 L of water.
+        """
+        for h in (0.5, 2.0, 3.0):
+            with self.subTest(h_plus=h):
+                plan = plan_acid_dosing(hco3_base_water=h + 0.5,
+                                        no3_headroom=99.0, p_headroom=0.0)
+                self.assertAlmostEqual(plan.h_required, h, places=9)
+                self.assertAlmostEqual(
+                    plan.nitric_l,
+                    plan.nitric_l_direct * DEFAULT_POLICY.concentration_factor,
+                    places=6)
+
+    def test_direct_dose_matches_reference_implementation(self):
+        """Independent re-derivation from first principles, not the engine's."""
+        def reference(h_mmol_l, volume_l=1000.0):
+            molarity = (1.24 * 1000 * 0.0838) / 14.0   # 8.38% N w/w, N = 14 g/mol
+            return ((h_mmol_l / 1000.0) * volume_l) / molarity
+        f = FERTILISERS["hno3_38"]
+        for h in (0.5, 1.0, 2.0, 4.0):
+            with self.subTest(h_plus=h):
+                self.assertAlmostEqual(acid_volume_direct_l(h, f, 1000.0),
+                                       reference(h), delta=0.002)
+
+    def test_plan_reports_both_bases(self):
+        plan = plan_acid_dosing(2.5, no3_headroom=99.0, p_headroom=0.0)
+        self.assertGreater(plan.nitric_l, plan.nitric_l_direct)
+        self.assertEqual(plan.direct_basis_volume_l, DEFAULT_POLICY.tank_volume_l)
 
 
 class TestModule1AcidDosing(unittest.TestCase):

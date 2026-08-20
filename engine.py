@@ -164,11 +164,59 @@ class AcidPlan:
     hco3_residual: float
     no3_added: float
     p_added: float
+    # Concentrated stock tank: product to add to ONE 1000 L A/B tank, which is
+    # then injected at 1:100 into the irrigation line.
     nitric_kg: float
     nitric_l: float
     phosphoric_kg: float
     phosphoric_l: float
+    # Direct injection: product to add to 1000 L of irrigation water at working
+    # strength (1x). Exactly 1/concentration_factor of the stock-tank figure.
+    nitric_l_direct: float
+    phosphoric_l_direct: float
+    direct_basis_volume_l: float
     feasible: bool
+
+
+def acid_molarity_mol_per_l(fert: Fertiliser) -> float:
+    """
+    Moles of titratable H+ per litre of the liquid acid product.
+
+        mol/L = (density g/L) / (grams of product per mole of H+)
+
+    For nitric acid 38% from Table 5 (p. 26): 1240 / 167 = 7.425 mol/L.
+
+    Deriving it the other way round from mass fraction and formula weight,
+    1.23 g/mL x 1000 x 0.38 / 63.01 = 7.418 mol/L, agrees to 0.1%. The
+    difference is only the density constant — real 38% HNO3 is 1.229-1.234
+    g/mL at 20 C. The catalogue value is used so that this path and the
+    stock-tank mass path cannot drift apart; override `density` on the
+    Fertiliser record if your supplier's data sheet says otherwise.
+    """
+    if not fert.density:
+        raise ValueError(f"{fert.fid} has no density; molarity is undefined")
+    return (fert.density * 1000.0) / fert.mass_per_mol_ion
+
+
+def acid_volume_direct_l(h_required_mmol_per_l: float,
+                         fert: Fertiliser,
+                         water_volume_l: float = 1000.0) -> float:
+    """
+    Litres of liquid acid to dose DIRECTLY into `water_volume_l` of irrigation
+    water at working strength.
+
+        H+ needed (mol) = h_required (mmol/L) / 1000 x water volume (L)
+        volume (L)      = H+ needed / molarity of the product
+
+    This is NOT the stock-tank figure. A 100x A/B tank needs 100 times this
+    volume, because one tank of stock treats 100 tank-volumes of water. Use
+    this when acid goes straight into a mixing tank or through a dosing pump
+    on the irrigation line; use `AcidPlan.nitric_l` when filling A/B tanks.
+    """
+    if h_required_mmol_per_l <= 0 or water_volume_l <= 0:
+        return 0.0
+    total_h_mol = (h_required_mmol_per_l / 1000.0) * water_volume_l
+    return total_h_mol / acid_molarity_mol_per_l(fert)
 
 
 def classify_water(ec: float, na: float, cl: float) -> int:
@@ -340,6 +388,9 @@ def plan_acid_dosing(hco3_base_water: float,
     nitric_kg = stock_mass_kg(h_nitric, hno3.mass_per_mol_ion, policy)
     phos_kg = stock_mass_kg(h_phos, h3po4.mass_per_mol_ion, policy)
 
+    # Working-strength dose, for growers injecting acid straight into a mixing
+    # tank rather than filling a concentrated A/B tank.
+    direct_basis = policy.tank_volume_l
     return AcidPlan(
         hco3_base_water=hco3_base_water,
         hco3_buffer_target=buffer_target,
@@ -354,6 +405,9 @@ def plan_acid_dosing(hco3_base_water: float,
         nitric_l=nitric_kg / hno3.density if hno3.density else 0.0,
         phosphoric_kg=phos_kg,
         phosphoric_l=phos_kg / h3po4.density if h3po4.density else 0.0,
+        nitric_l_direct=acid_volume_direct_l(h_nitric, hno3, direct_basis),
+        phosphoric_l_direct=acid_volume_direct_l(h_phos, h3po4, direct_basis),
+        direct_basis_volume_l=direct_basis,
         feasible=shortfall <= EPS,
     )
 

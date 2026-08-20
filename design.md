@@ -674,6 +674,41 @@ def plan_acid(h_required, headroom_no3, headroom_p, policy):
 
 **CO₂ escape requirement** `SRC:WUR` p. 13 — `INFO` gate always attached to any acid plan: the acid/bicarbonate reaction must occur in an **open** system (open mixing tank); if CO₂ cannot escape, the pH will not drop and will fluctuate.
 
+**Two dosing bases — both always reported.** `SRC:DERIVED`
+
+The same H⁺ demand yields two different, equally correct acid volumes, and they
+differ by the concentration factor. Reporting only one invites a 100× dosing
+error, so M1 returns both with the basis named in the key itself.
+
+| Basis | Question answered | Formula | At H⁺ = 2.0 mmol/L |
+|---|---|---|---|
+| **Stock tank** (`nitric_l`) | How much acid goes into one 1000 L A/B tank at 100×? | `mmol/L × MW × 0.1 ÷ density` | **26.94 L** |
+| **Working solution** (`nitric_l_direct`) | How much acid goes into 1000 L of irrigation water at 1×? | `(mmol/L ÷ 1000 × V) ÷ molarity` | **0.269 L** |
+
+```
+nitric_l  ==  nitric_l_direct × concentration_factor        (exact identity)
+```
+
+One 1000 L tank at 100× treats 100,000 L of irrigation water, so its acid
+charge is 100× the dose for 1000 L of water. Use the stock-tank figure when
+filling A/B tanks; use the working-solution figure when a dosing pump injects
+acid straight into a mixing tank or the irrigation line.
+
+**Product molarity.** Moles of titratable H⁺ per litre of product:
+
+```
+mol/L = (density g/L) / (grams of product per mole of H⁺)
+      = 1240 / 167 = 7.425 mol/L          # nitric acid 38%, Table 5 p. 26
+```
+
+Deriving it instead from mass fraction and formula weight —
+`1.23 g/mL × 1000 × 0.38 / 63.01 = 7.418 mol/L` — agrees to **0.1%**. The gap is
+only the density constant; real 38% HNO₃ is 1.229–1.234 g/mL at 20 °C. The
+catalogue value is authoritative so that this path and the stock-tank mass path
+cannot drift apart, and it independently reproduces the manual's declared
+"8.4% N" (computed: 8.38%). Override `Fertiliser.density` if a supplier's
+safety data sheet differs.
+
 **Product volume** (`SRC:DERIVED` from §6.7.3):
 
 ```
