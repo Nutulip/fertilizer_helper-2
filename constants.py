@@ -10,7 +10,9 @@ Nothing in this module is invented.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +359,7 @@ class CropRecipe:
     name_en: str
     name_zh: str
     botanical: str
+    category: str
     medium: str
     ph_root_zone: tuple[float, float]
     ph_fertigation: float
@@ -368,6 +371,10 @@ class CropRecipe:
     na_max_root_zone: float
     cl_max_root_zone: float
     adjustments: tuple[StageAdjustment, ...]
+    # `high_water` is an orthogonal CONDITION, not a growth stage: supply above
+    # 5 L/m2/day can coincide with any stage. Kept out of `adjustments` so the
+    # UI cannot present it as a mutually-exclusive phase.
+    high_water_adjustment: dict[str, float]
     source_page: int
     # How the root-zone target values were derived. This is NOT cosmetic: the
     # organic and soil targets are expressed on a diluted water-extract basis,
@@ -394,325 +401,95 @@ _END_SEASON_NOTE_EN = ("End of the crop, after removal of the growth point. "
 _END_SEASON_NOTE_ZH = "生育末期，摘心之后；多在秋季末批果实成熟期。"
 
 
-_CROPS_INERT: dict[str, CropRecipe] = {
-    # ---------------- TOMATO / INERT SUBSTRATE — p. 53 ----------------
-    "tomato": CropRecipe(
-        crop_id="tomato",
-        name_en="Tomato", name_zh="番茄",
-        botanical="Solanum lycopersicum",
-        medium="INERT_SUBSTRATE",
-        ph_root_zone=(5.5, 6.0), ph_fertigation=5.3,
-        ec_root_zone=4.0, ec_fertigation=2.6,
-        root_zone_targets={
-            "NH4": 0.5, "K": 8.0, "Ca": 10.0, "Mg": 4.5,
-            "NO3": 22.0, "S": 6.8, "P": 1.0,
-            "Fe": 35.0, "Mn": 5.0, "Zn": 7.0, "B": 50.0, "Cu": 0.7, "Mo": 0.5,
-        },
-        fertigation={
-            "NH4": 1.2, "K": 9.5, "Ca": 5.4, "Mg": 2.4,
-            "NO3": 15.0, "Cl": 1.0, "S": 4.4, "P": 1.5,
-        },
-        micro_fertigation={
-            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 0.75, "Mo": 0.5,
-        },
-        na_max_root_zone=8.0, cl_max_root_zone=8.0,
-        adjustments=(
-            StageAdjustment("start", "Start", "定植初期",
-                            {"NH4": -1.0, "K": -1.0, "Ca": 0.5, "Mg": 0.5,
-                             "Fe": 10.0, "B": 10.0}),
-            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
-                            {"K": 1.5, "Ca": -0.5, "Mg": -0.25},
-                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
-            StageAdjustment("high_water", "High Water Supply", "高供水量",
-                            {"K": -1.0, "Ca": 0.5},
-                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
-            StageAdjustment("end_season", "End of Season", "生育末期",
-                            {"NH4": -1.0, "P": -1.0},
-                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
-        ),
-        source_page=53,
-    ),
-
-    # ---------------- CUCUMBER / INERT SUBSTRATE — p. 41 ----------------
-    "cucumber": CropRecipe(
-        crop_id="cucumber",
-        name_en="Cucumber", name_zh="黄瓜",
-        botanical="Cucumis sativus",
-        medium="INERT_SUBSTRATE",
-        ph_root_zone=(5.2, 6.0), ph_fertigation=5.3,
-        ec_root_zone=3.0, ec_fertigation=2.2,
-        root_zone_targets={
-            "NH4": 0.5, "K": 8.0, "Ca": 6.5, "Mg": 3.0,
-            "NO3": 18.0, "S": 3.5, "P": 0.9,
-            "Fe": 30.0, "Mn": 7.0, "Zn": 7.0, "B": 50.0, "Cu": 1.5, "Mo": 0.5,
-        },
-        fertigation={
-            "NH4": 1.25, "K": 8.0, "Ca": 4.0, "Mg": 1.375,
-            "NO3": 16.0, "Cl": 0.0, "S": 1.375, "P": 1.25,
-        },
-        micro_fertigation={
-            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 25.0, "Cu": 0.75, "Mo": 0.5,
-        },
-        na_max_root_zone=6.0, cl_max_root_zone=6.0,
-        adjustments=(
-            StageAdjustment("start", "Start", "定植初期",
-                            {"NH4": -0.5, "K": -1.0, "Ca": 0.5, "Mg": 0.25,
-                             "Fe": 10.0, "B": 10.0}),
-            # +1 K and +1 N-NO3 == exactly 1.0 mmol/L KNO3 == 10.11 kg/1000 L
-            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
-                            {"K": 1.0, "NO3": 1.0},
-                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
-            StageAdjustment("high_water", "High Water Supply", "高供水量",
-                            {"K": -1.0, "Ca": 0.5},
-                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
-            StageAdjustment("end_season", "End of Season", "生育末期",
-                            {"NH4": -1.0, "P": -1.0},
-                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
-        ),
-        source_page=41,
-    ),
-
-    # ---------------- SWEET PEPPER / INERT SUBSTRATE — p. 50 ----------------
-    "sweet_pepper": CropRecipe(
-        crop_id="sweet_pepper",
-        name_en="Sweet Pepper", name_zh="甜椒",
-        botanical="Capsicum annuum",
-        medium="INERT_SUBSTRATE",
-        ph_root_zone=(6.0, 6.0), ph_fertigation=5.3,
-        ec_root_zone=3.0, ec_fertigation=2.2,
-        root_zone_targets={
-            "NH4": 0.5, "K": 5.0, "Ca": 8.5, "Mg": 3.0,
-            "NO3": 17.0, "S": 3.0, "P": 1.2,
-            "Fe": 25.0, "Mn": 5.0, "Zn": 7.0, "B": 80.0, "Cu": 0.7, "Mo": 0.5,
-        },
-        fertigation={
-            "NH4": 1.0, "K": 6.75, "Ca": 5.0, "Mg": 1.5,
-            "NO3": 16.0, "Cl": 0.0, "S": 1.75, "P": 1.25,
-        },
-        micro_fertigation={
-            "Fe": 15.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 1.0, "Mo": 0.5,
-        },
-        na_max_root_zone=6.0, cl_max_root_zone=6.0,
-        adjustments=(
-            StageAdjustment("start", "Start", "定植初期",
-                            {"NH4": -0.5, "K": -1.0, "Ca": 0.5, "Mg": 0.25,
-                             "Fe": 10.0, "B": 10.0}),
-            StageAdjustment("fruit_set", "Fruit Set", "坐果期",
-                            {"K": 1.0, "NO3": 1.0},
-                            _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
-            StageAdjustment("high_water", "High Water Supply", "高供水量",
-                            {"K": -1.0, "Ca": 0.5},
-                            _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
-            StageAdjustment("end_season", "End of Season", "生育末期",
-                            {"NH4": -1.0, "P": -1.0},
-                            _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
-        ),
-        source_page=50,
-    ),
-}
-
-
-# Shared stage-adjustment sets. Organic material carries the same adjustment
-# columns as inert substrate for these crops; soil pages publish none at all.
-_ADJ_TOMATO = (
-    StageAdjustment("start", "Start", "定植初期",
-                    {"NH4": -1.0, "K": -1.0, "Ca": 0.5, "Mg": 0.5,
-                     "Fe": 10.0, "B": 10.0}),
-    StageAdjustment("fruit_set", "Fruit Set", "坐果期",
-                    {"K": 1.5, "Ca": -0.5, "Mg": -0.25},
-                    _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
-    StageAdjustment("high_water", "High Water Supply", "高供水量",
-                    {"K": -1.0, "Ca": 0.5},
-                    _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
-    StageAdjustment("end_season", "End of Season", "生育末期",
-                    {"NH4": -1.0, "P": -1.0},
-                    _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
-)
-
-_ADJ_CUCURBIT = (
-    StageAdjustment("start", "Start", "定植初期",
-                    {"NH4": -0.5, "K": -1.0, "Ca": 0.5, "Mg": 0.25,
-                     "Fe": 10.0, "B": 10.0}),
-    StageAdjustment("fruit_set", "Fruit Set", "坐果期",
-                    {"K": 1.0, "NO3": 1.0},
-                    _FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH),
-    StageAdjustment("high_water", "High Water Supply", "高供水量",
-                    {"K": -1.0, "Ca": 0.5},
-                    _HIGH_WATER_NOTE_EN, _HIGH_WATER_NOTE_ZH),
-    StageAdjustment("end_season", "End of Season", "生育末期",
-                    {"NH4": -1.0, "P": -1.0},
-                    _END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH),
-)
-
-
-_CROPS_ORGANIC: dict[str, CropRecipe] = {
-    # ---------------- TOMATO / ORGANIC MATERIAL — p. 54 ----------------
-    "tomato": CropRecipe(
-        crop_id="tomato",
-        name_en="Tomato", name_zh="番茄",
-        botanical="Solanum lycopersicum",
-        medium="ORGANIC_MATERIAL",
-        ph_root_zone=(5.8, 5.8), ph_fertigation=5.3,
-        ec_root_zone=1.5, ec_fertigation=2.6,
-        root_zone_targets={
-            "NH4": 0.1, "K": 2.8, "Ca": 3.8, "Mg": 1.8,
-            "NO3": 8.25, "S": 2.5, "P": 0.5,
-            "Fe": 15.0, "Mn": 2.0, "Zn": 5.0, "B": 25.0, "Cu": 0.5, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 1.0, "K": 9.3, "Ca": 5.5, "Mg": 2.4,
-            "NO3": 14.8, "Cl": 1.0, "S": 4.4, "P": 1.5,
-        },
-        micro_fertigation={
-            "Fe": 30.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 0.75, "Mo": 0.5,
-        },
-        na_max_root_zone=2.0, cl_max_root_zone=2.0,
-        adjustments=_ADJ_TOMATO,
-        source_page=54, extract_method="1:1.5_volume",
-    ),
-
-    # ---------------- CUCUMBER / ORGANIC MATERIAL — p. 42 ----------------
-    "cucumber": CropRecipe(
-        crop_id="cucumber",
-        name_en="Cucumber", name_zh="黄瓜",
-        botanical="Cucumis sativus",
-        medium="ORGANIC_MATERIAL",
-        ph_root_zone=(5.2, 6.0), ph_fertigation=5.3,
-        ec_root_zone=1.4, ec_fertigation=2.2,
-        root_zone_targets={
-            "NH4": 0.5, "K": 3.0, "Ca": 3.0, "Mg": 1.5,
-            "NO3": 8.0, "S": 1.5, "P": 0.7,
-            "Fe": 10.0, "Mn": 3.0, "Zn": 4.0, "B": 20.0, "Cu": 1.0, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 1.0, "K": 8.0, "Ca": 4.5, "Mg": 1.5,
-            "NO3": 16.75, "Cl": 0.0, "S": 1.5, "P": 1.25,
-        },
-        micro_fertigation={
-            "Fe": 30.0, "Mn": 10.0, "Zn": 5.0, "B": 25.0, "Cu": 0.75, "Mo": 0.5,
-        },
-        na_max_root_zone=2.0, cl_max_root_zone=2.0,
-        adjustments=_ADJ_CUCURBIT,
-        source_page=42, extract_method="1:1.5_volume",
-    ),
-
-    # ---------------- SWEET PEPPER / ORGANIC MATERIAL — p. 51 ----------------
-    "sweet_pepper": CropRecipe(
-        crop_id="sweet_pepper",
-        name_en="Sweet Pepper", name_zh="甜椒",
-        botanical="Capsicum annuum",
-        medium="ORGANIC_MATERIAL",
-        ph_root_zone=(5.8, 5.8), ph_fertigation=5.3,
-        ec_root_zone=1.4, ec_fertigation=2.1,
-        root_zone_targets={
-            "NH4": 0.1, "K": 3.0, "Ca": 3.0, "Mg": 1.5,
-            "NO3": 8.0, "S": 1.5, "P": 0.7,
-            "Fe": 10.0, "Mn": 3.0, "Zn": 4.0, "B": 25.0, "Cu": 0.5, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 1.05, "K": 6.2, "Ca": 5.25, "Mg": 1.5,
-            "NO3": 16.0, "Cl": 0.0, "S": 1.75, "P": 1.25,
-        },
-        micro_fertigation={
-            "Fe": 30.0, "Mn": 10.0, "Zn": 5.0, "B": 30.0, "Cu": 1.0, "Mo": 0.5,
-        },
-        na_max_root_zone=2.0, cl_max_root_zone=2.0,
-        adjustments=_ADJ_CUCURBIT,
-        source_page=51, extract_method="1:1.5_volume",
-    ),
-}
-
-
-# Soil pages publish no adjustment columns at all — the buffering capacity of
-# soil makes short-term stage steering through the nutrient solution far less
-# effective than in a restricted root volume.
-_CROPS_SOIL: dict[str, CropRecipe] = {
-    # ---------------- TOMATO / SOIL — p. 55 ----------------
-    "tomato": CropRecipe(
-        crop_id="tomato",
-        name_en="Tomato", name_zh="番茄",
-        botanical="Solanum lycopersicum",
-        medium="SOIL",
-        ph_root_zone=(6.0, 6.0), ph_fertigation=5.3,
-        ec_root_zone=1.4, ec_fertigation=1.3,
-        root_zone_targets={
-            "NH4": 0.1, "K": 2.2, "Ca": 2.5, "Mg": 1.7,
-            "NO3": 5.0, "S": 2.5, "P": 0.1,
-            "Fe": 8.0, "Mn": 1.0, "Zn": 1.0, "B": 10.0, "Cu": 0.5, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 0.9, "K": 5.0, "Ca": 2.0, "Mg": 1.5,
-            "NO3": 9.4, "Cl": 0.0, "S": 1.5, "P": 0.5,
-        },
-        micro_fertigation={
-            "Fe": 5.0, "Mn": 2.0, "Zn": 1.0, "B": 10.0, "Cu": 0.3, "Mo": 0.0,
-        },
-        na_max_root_zone=8.0, cl_max_root_zone=8.0,
-        adjustments=(),
-        source_page=55, extract_method="1:2_volume",
-    ),
-
-    # ---------------- CUCUMBER / SOIL — p. 43 ----------------
-    "cucumber": CropRecipe(
-        crop_id="cucumber",
-        name_en="Cucumber", name_zh="黄瓜",
-        botanical="Cucumis sativus",
-        medium="SOIL",
-        ph_root_zone=(6.0, 6.0), ph_fertigation=5.3,
-        ec_root_zone=1.0, ec_fertigation=1.0,
-        root_zone_targets={
-            "NH4": 0.1, "K": 1.8, "Ca": 2.2, "Mg": 1.2,
-            "NO3": 4.0, "S": 1.5, "P": 0.1,
-            "Fe": 8.0, "Mn": 1.0, "Zn": 1.0, "B": 10.0, "Cu": 0.5, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 0.9, "K": 3.5, "Ca": 2.0, "Mg": 1.0,
-            "NO3": 7.9, "Cl": 0.0, "S": 1.0, "P": 0.5,
-        },
-        micro_fertigation={
-            "Fe": 5.0, "Mn": 2.0, "Zn": 1.0, "B": 10.0, "Cu": 0.3, "Mo": 0.0,
-        },
-        na_max_root_zone=3.0, cl_max_root_zone=3.0,
-        adjustments=(),
-        source_page=43, extract_method="1:2_volume",
-    ),
-
-    # ---------------- SWEET PEPPER / SOIL — p. 52 ----------------
-    "sweet_pepper": CropRecipe(
-        crop_id="sweet_pepper",
-        name_en="Sweet Pepper", name_zh="甜椒",
-        botanical="Capsicum annuum",
-        medium="SOIL",
-        ph_root_zone=(6.0, 6.0), ph_fertigation=5.3,
-        ec_root_zone=1.1, ec_fertigation=1.1,
-        root_zone_targets={
-            "NH4": 0.1, "K": 2.0, "Ca": 2.5, "Mg": 1.2,
-            "NO3": 4.5, "S": 2.0, "P": 0.1,
-            "Fe": 8.0, "Mn": 1.0, "Zn": 1.0, "B": 10.0, "Cu": 0.5, "Mo": 0.3,
-        },
-        fertigation={
-            "NH4": 0.9, "K": 4.0, "Ca": 2.0, "Mg": 1.0,
-            "NO3": 8.4, "Cl": 0.0, "S": 1.0, "P": 0.5,
-        },
-        micro_fertigation={
-            "Fe": 5.0, "Mn": 2.0, "Zn": 1.0, "B": 10.0, "Cu": 0.3, "Mo": 0.0,
-        },
-        na_max_root_zone=3.0, cl_max_root_zone=3.0,
-        adjustments=(),
-        source_page=52, extract_method="1:2_volume",
-    ),
-}
-
-
 # --------------------------------------------------------------------------
-# Crop x substrate matrix — the single lookup surface for target values.
+# Crop x substrate library — loaded from crops_wur.json
+#
+# That file is machine-extracted from Section B by tools/extract2.py and
+# validated by the tables' own redundancy: every mmol/L value must reproduce
+# the printed ppm column when multiplied by its atomic weight. The extractor
+# was checked against nine hand-transcribed matrices (tomato, cucumber and
+# sweet pepper across all three substrates): 332 values, zero mismatches.
+#
+# `high_water` is deliberately NOT a growth stage. The manual prints it as a
+# fourth adjustment column, but agronomically it is an orthogonal condition —
+# supply above 5 L/m2/day — that can coincide with any stage. It is therefore
+# stored separately as `high_water_adjustment` and driven by its own flag.
 # --------------------------------------------------------------------------
 
-CROP_MATRIX: dict[tuple[str, str], CropRecipe] = {
-    **{(cid, "INERT_SUBSTRATE"): c for cid, c in _CROPS_INERT.items()},
-    **{(cid, "ORGANIC_MATERIAL"): c for cid, c in _CROPS_ORGANIC.items()},
-    **{(cid, "SOIL"): c for cid, c in _CROPS_SOIL.items()},
+CROP_CATEGORIES: tuple[str, ...] = (
+    "fruiting_vegetables", "soft_fruits", "leafy_vegetables",
+    "cut_flowers", "potted_plants",
+)
+
+CROP_CATEGORY_LABELS: dict[str, str] = {
+    "fruiting_vegetables": bi("Fruiting Vegetables", "果菜类"),
+    "soft_fruits":         bi("Soft Fruits / Berries", "浆果类"),
+    "leafy_vegetables":    bi("Leafy Vegetables", "叶菜类"),
+    "cut_flowers":         bi("Cut Flowers", "切花类"),
+    "potted_plants":       bi("Potted Plants", "盆栽植物"),
 }
+
+GROWTH_STAGE_LABELS: dict[str, tuple[str, str]] = {
+    "start":      ("Start / Rooting", "定植期 / 生根期"),
+    "vegetative": ("Vegetative", "营养生长期"),
+    "flowering":  ("Flowering", "花期"),
+    "fruit_set":  ("Fruit Set", "坐果期"),
+    "production": ("Heavy Bearing / Production", "盛产期"),
+    "end_season": ("Final Phase / End of Season", "生育末期"),
+    "winter":     ("Winter", "冬季"),
+}
+
+HIGH_WATER_NOTE_EN = ("Adjustments for high water supply are recommended when "
+                      "water supply exceeds 5 l/m2/day.")
+HIGH_WATER_NOTE_ZH = "当供水量超过 5 升/平方米/天时，建议进行高供水调整。"
+
+_LIB_PATH = Path(__file__).resolve().parent / "crops_wur.json"
+_LIB = json.loads(_LIB_PATH.read_text(encoding="utf-8"))
+
+_FRUIT_SET_NOTE = (_FRUIT_SET_NOTE_EN, _FRUIT_SET_NOTE_ZH)
+_END_SEASON_NOTE = (_END_SEASON_NOTE_EN, _END_SEASON_NOTE_ZH)
+
+
+def _build_recipe(meta: dict, m: dict) -> CropRecipe:
+    stages = []
+    for stage, deltas in m["growth_stages"].items():
+        en, zh = GROWTH_STAGE_LABELS.get(stage, (stage.title(), stage))
+        note_en, note_zh = "", ""
+        if stage == "fruit_set":
+            note_en, note_zh = _FRUIT_SET_NOTE
+        elif stage == "end_season":
+            note_en, note_zh = _END_SEASON_NOTE
+        stages.append(StageAdjustment(stage, en, zh, dict(deltas), note_en, note_zh))
+    order = list(GROWTH_STAGE_LABELS)
+    stages.sort(key=lambda a: order.index(a.stage) if a.stage in order else 99)
+
+    ph = m["ph_root_zone"]
+    return CropRecipe(
+        crop_id=meta["crop_id"],
+        name_en=meta["name_en"], name_zh=meta["name_zh"],
+        botanical=meta.get("botanical", ""),
+        category=meta["category"],
+        medium=m["substrate_type"],
+        ph_root_zone=(ph[0], ph[1]),
+        ph_fertigation=m["ph_fertigation"],
+        ec_root_zone=m["ec_root_zone"],
+        ec_fertigation=m["ec_fertigation"],
+        root_zone_targets=dict(m["root_zone_targets"]),
+        fertigation=dict(m["fertigation"]),
+        micro_fertigation=dict(m["micro_fertigation"]),
+        na_max_root_zone=m.get("na_max_root_zone"),
+        cl_max_root_zone=m.get("cl_max_root_zone"),
+        adjustments=tuple(stages),
+        high_water_adjustment=dict(m.get("high_water_adjustment") or {}),
+        source_page=m["source_page"],
+        extract_method=m["extract_method"],
+    )
+
+
+CROP_MATRIX: dict[tuple[str, str], CropRecipe] = {}
+for _cid, _meta in _LIB["crops"].items():
+    for _med, _m in _meta["matrices"].items():
+        CROP_MATRIX[(_cid, _med)] = _build_recipe(_meta, _m)
 
 
 def get_crop(crop_id: str, substrate_type: str = DEFAULT_SUBSTRATE) -> CropRecipe | None:
@@ -725,17 +502,26 @@ def get_crop(crop_id: str, substrate_type: str = DEFAULT_SUBSTRATE) -> CropRecip
 
 
 def crop_ids() -> list[str]:
-    """Distinct crop ids, in the order they were declared."""
-    seen: list[str] = []
-    for cid, _ in CROP_MATRIX:
-        if cid not in seen:
-            seen.append(cid)
-    return seen
+    return list(_LIB["crops"].keys())
 
 
 def substrates_for(crop_id: str) -> list[str]:
-    """Substrate types with a published matrix for this crop."""
     return [s for s in SUBSTRATE_TYPES if (crop_id, s) in CROP_MATRIX]
+
+
+def crops_in_category(category: str) -> list[str]:
+    return [cid for cid, m in _LIB["crops"].items() if m["category"] == category]
+
+
+def crop_meta(crop_id: str) -> dict | None:
+    return _LIB["crops"].get(crop_id)
+
+
+def growth_stages_for(crop_id: str,
+                      substrate_type: str = DEFAULT_SUBSTRATE) -> list[str]:
+    """Stage ids with published adjustments. Never includes `high_water`."""
+    crop = get_crop(crop_id, substrate_type)
+    return [a.stage for a in crop.adjustments] if crop else []
 
 
 # --------------------------------------------------------------------------
@@ -763,7 +549,23 @@ REFERENCE_IRRIGATION_L_M2_DAY: dict[str, dict[str, float]] = {
                      "end_season": 2.2, "standard": 3.5},
 }
 
-# Used when the crop itself is unknown.
+# Category-level defaults, used for crops without their own row. Every
+# `high_water` entry stays above 5 L/m2/day because that threshold is the
+# manual's own definition of the stage (crop-page note, e.g. p. 41).
+REFERENCE_IRRIGATION_BY_CATEGORY: dict[str, dict[str, float]] = {
+    "fruiting_vegetables": {"start": 1.5, "fruit_set": 3.8, "high_water": 5.5,
+                            "end_season": 2.5, "standard": 3.8},
+    "soft_fruits":         {"start": 1.0, "fruit_set": 2.5, "high_water": 5.2,
+                            "end_season": 1.5, "standard": 2.5},
+    "leafy_vegetables":    {"start": 0.8, "fruit_set": 2.0, "high_water": 5.2,
+                            "end_season": 1.2, "standard": 2.0},
+    "cut_flowers":         {"start": 1.2, "fruit_set": 3.0, "high_water": 5.2,
+                            "end_season": 1.8, "standard": 3.0},
+    "potted_plants":       {"start": 0.8, "fruit_set": 1.8, "high_water": 5.2,
+                            "end_season": 1.2, "standard": 1.8},
+}
+
+# Used when neither the crop nor its category is known.
 REFERENCE_IRRIGATION_FALLBACK = 3.5
 
 # NOTE ON `high_water`: the manual defines this stage as supply ABOVE
@@ -789,6 +591,10 @@ def reference_irrigation(crop_id: str,
             table[cid] = {**table.get(cid, {}), **per_stage}
 
     per_stage = table.get(crop_id)
+    if per_stage is None:
+        meta = _LIB["crops"].get(crop_id)
+        if meta:
+            per_stage = REFERENCE_IRRIGATION_BY_CATEGORY.get(meta["category"])
     if per_stage is None:
         return REFERENCE_IRRIGATION_FALLBACK
 

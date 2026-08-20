@@ -253,7 +253,14 @@ tailwind.config = {
 
     <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       <div>
-        <label class="block text-xs font-semibold text-slate-600 mb-1">Crop (作物)</label>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Crop Category (作物大类)</label>
+        <select id="categorySelect" onchange="onCategoryChange()"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"></select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1">
+          Crop (具体作物)</label>
         <select id="cropSelect" onchange="onCropChange()"
           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"></select>
       </div>
@@ -280,8 +287,27 @@ tailwind.config = {
       </div>
       <div class="sm:col-span-2 lg:col-span-3">
         <label class="block text-xs font-semibold text-slate-600 mb-1">
-          Growth Stages (生育阶段) — stackable (可叠加)</label>
+          Growth Stages (生长阶段) — stackable (可叠加)</label>
         <div id="stageBoxes" class="flex flex-wrap gap-2"></div>
+
+        <!-- High water supply is an orthogonal CONDITION, not a phase, so it
+             sits below the stage selector as its own toggle. -->
+        <div id="highWaterBlock"
+             class="mt-3 rounded-lg border border-slate-300 bg-slate-50 p-3">
+          <label class="flex items-start gap-2.5 cursor-pointer">
+            <input id="highWaterToggle" type="checkbox" onchange="onHighWaterChange()"
+              class="mt-0.5 h-4 w-4 rounded border-slate-400 text-brand-600 focus:ring-brand-600">
+            <span>
+              <span class="text-sm font-semibold text-slate-700">
+                High Water Supply <span class="text-brand-600">(高供水量)</span></span>
+              <span id="highWaterNote" class="block mt-0.5 text-[11px] text-slate-500 leading-snug">
+                Adjustments for high water supply are recommended when water supply
+                exceeds 5 l/m²/day.
+                <span class="block">（当供水量超过 5 升/平方米/天时，建议进行高供水调整。）</span>
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -673,7 +699,7 @@ const DEFAULT_ROOT_ZONE   = { NH4:0.2, K:7.2, Na:2.7, Ca:11.4, Mg:6.0, NO3:22.1,
 const DEFAULT_RZ_MICRO    = { Fe:41, Mn:3.8, Zn:7.6, B:144, Cu:2.1, Mo:1.4 };
 const DEFAULT_DRAIN       = { K:1.4, Ca:2.5, Mg:1.2, NO3:4.4, Cl:0.6, S:1.6, P:0.6 };
 
-const state = { crops: [], crop: null, gates: [], emergency: null };
+const state = { categories: [], crops: [], crop: null, gates: [], emergency: null };
 
 /* ══════════════════ HELPERS ══════════════════ */
 
@@ -1041,12 +1067,40 @@ async function runModule1() {
 
 /* ══════════════════ MODULE 5 — CROP & STAGE ══════════════════ */
 
+/** Tier 1: categories. */
 async function loadCrops() {
-  const r = await api('/api/v1/crops');
+  const r = await api('/api/v1/crop-categories');
+  state.categories = r.categories;
+  $('categorySelect').innerHTML = r.categories.map(c =>
+    `<option value="${esc(c.value)}">${esc(c.label_text)} — ${c.crop_count}</option>`).join('');
+  await onCategoryChange();
+}
+
+/** Tier 2: crops inside the selected category. */
+async function onCategoryChange() {
+  const cat = $('categorySelect').value;
+  if (!cat) return;
+  const r = await api('/api/v1/crop-categories/' + encodeURIComponent(cat) + '/crops');
   state.crops = r.crops;
   $('cropSelect').innerHTML = r.crops.map(c =>
-    `<option value="${esc(c.crop_id)}">${esc(c.name_text)} — ${esc(c.medium_text)}</option>`).join('');
+    `<option value="${esc(c.crop_id)}">${esc(c.name_text)}</option>`).join('');
   await onCropChange();
+}
+
+/** Keep the substrate list to what this crop actually publishes. */
+function syncSubstrateOptions(available) {
+  const sel = $('substrateSelect');
+  const current = sel.value;
+  Array.from(sel.options).forEach(o => {
+    const ok = !available || available.includes(o.value);
+    o.disabled = !ok;
+    o.hidden = !ok;
+  });
+  if (available && !available.includes(current)) sel.value = available[0];
+}
+
+function onHighWaterChange() {
+  if (state.crop) runModule5();
 }
 
 /** The substrate currently selected in Tab 2. Every crop-aware call needs it. */
@@ -1057,6 +1111,8 @@ function substrateType() {
 async function onCropChange() {
   const id = $('cropSelect').value;
   if (!id) return;
+  const meta = (state.crops || []).find(c => c.crop_id === id);
+  syncSubstrateOptions(meta && meta.substrate_types);
   const sub = substrateType();
   // Target values are published per crop AND per substrate, so both key the lookup.
   state.crop = await api('/api/v1/crops/' + encodeURIComponent(id)
@@ -1069,6 +1125,11 @@ async function onCropChange() {
   $('cropSubstrate').textContent = c.substrate_type_text;
   $('cropStage').textContent =
     `EC target ${c.ec_root_zone_ms_cm} · Na ≤ ${c.na_max_root_zone_mmol_l} mmol/L (目标电导率 / 钠上限)`;
+
+  const hw = c.high_water_supply || {};
+  $('highWaterBlock').classList.toggle('opacity-40', !hw.available);
+  $('highWaterToggle').disabled = !hw.available;
+  if (!hw.available) $('highWaterToggle').checked = false;
 
   // Soil pages publish no adjustment columns, so say so rather than showing
   // an unexplained empty row.
@@ -1130,6 +1191,11 @@ function miniTable(obj, unit) {
       </tr>`).join('')}</tbody></table></div>`;
 }
 
+function isHighWaterSupply() {
+  const el = $('highWaterToggle');
+  return !!(el && el.checked && !el.disabled);
+}
+
 function selectedStages() {
   return Array.from(document.querySelectorAll('.stage-box:checked')).map(b => b.value);
 }
@@ -1142,6 +1208,7 @@ async function runModule5() {
       crop_id: $('cropSelect').value,
       substrate_type: substrateType(),
       stages,
+      is_high_water_supply: isHighWaterSupply(),
       dry_back_intent: $('dryBack').value,
     });
     const d = r.data;
@@ -1156,6 +1223,10 @@ async function runModule5() {
           ['K:Ca Ratio (钾钙比)', fmt(d.k_ca_ratio, 3)],
           ['K:N Ratio (钾氮比)', fmt(d.k_n_ratio, 3)],
           ['Dry-back Intent (回干策略)', esc(d.dry_back_intent_text)],
+          ['High Water Supply (高供水量)',
+            d.is_high_water_supply
+              ? '<span class="text-amber-700">Applied (已应用)</span>'
+              : '<span class="text-slate-400">Not applied (未应用)</span>'],
           ['Dry-back Target (回干目标)',
             `<span class="text-amber-700">${d.dry_back_target_pct_min}–${d.dry_back_target_pct_max}%</span>`],
         ])}
@@ -1582,6 +1653,7 @@ async function runFullPipeline() {
     crop_id: $('cropSelect').value,
     substrate_type: substrateType(),
     stages: selectedStages(),
+    is_high_water_supply: isHighWaterSupply(),
     base_water_mmol: bwMacro,
     base_water_micro_umol: bwMicro,
     base_water_ec: readNum('bwEC') || 0,

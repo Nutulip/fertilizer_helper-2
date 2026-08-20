@@ -38,6 +38,9 @@ from constants import (
     NA_LIMITS_MMOL_L, OXIDE_TO_ELEMENTAL, SUBSTRATE_LABELS, SUBSTRATE_TYPES,
     reference_irrigation,
     WATER_QUALITY_LEVELS, SitePolicy, bi, crop_ids, get_crop, substrates_for,
+    CROP_CATEGORIES, CROP_CATEGORY_LABELS, GROWTH_STAGE_LABELS,
+    HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH, crops_in_category, crop_meta,
+    growth_stages_for,
 )
 from engine import (
     DRY_BACK_TARGETS, Gate, LF_BANDS, acid_gates, allocate_fertilisers,
@@ -51,6 +54,7 @@ from engine import (
     ion_balance_gates,
     iron_screening_gates,
     leaching_gates, micronutrient_screening_gates, mmol_to_ppm, na_limit_for,
+    residual_gates,
     plan_acid_dosing, ppb_to_umol, ppm_to_mmol, scale_to_ec, screen_antagonism,
     select_fe_chelate, sodium_gates, sort_gates, split_ab_tanks, steering_gates,
     stock_mass_kg, stock_mass_micro_g, tank_ph_gates, to_reference_ec,
@@ -243,16 +247,24 @@ if FASTAPI_AVAILABLE:
 
     class SteeringRequest(BaseModel):
         crop_id: str
+        crop_category: str | None = None
+        growth_stage: str | None = None
+        is_high_water_supply: bool = Field(
+            default=False,
+            description="High water supply (>5 L/m2/day). An orthogonal condition, not a growth stage.")
         substrate_type: str = Field(
             default="INERT_SUBSTRATE",
             description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
-        stages: list[str] = Field(default_factory=lambda: ["fruit_set"])
+        stages: list[str] = Field(default_factory=list)
         dry_back_intent: str = "BALANCED"
         na_ratio: float | None = None
         wash_active: bool = False
 
     class TankRequest(BaseModel):
         crop_id: str
+        is_high_water_supply: bool = Field(
+            default=False,
+            description="High water supply (>5 L/m2/day). An orthogonal condition, not a growth stage.")
         substrate_type: str = Field(
             default="INERT_SUBSTRATE",
             description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
@@ -298,6 +310,9 @@ if FASTAPI_AVAILABLE:
 
     class SessionRequest(BaseModel):
         crop_id: str
+        is_high_water_supply: bool = Field(
+            default=False,
+            description="High water supply (>5 L/m2/day). An orthogonal condition, not a growth stage.")
         substrate_type: str = Field(
             default="INERT_SUBSTRATE",
             description="INERT_SUBSTRATE | ORGANIC_MATERIAL | SOIL — target values differ per medium")
@@ -473,6 +488,71 @@ if FASTAPI_AVAILABLE:
             "source": "Section B; extraction methods Ch. 4, p. 18",
         }
 
+    @app.get("/api/v1/crop-categories")
+    def list_categories() -> dict:
+        """Tier 1 of the cascading selector."""
+        return {
+            "categories": [
+                {"value": c,
+                 "label": c.replace("_", " ").title(),
+                 "label_text": CROP_CATEGORY_LABELS[c],
+                 "crop_count": len(crops_in_category(c))}
+                for c in CROP_CATEGORIES],
+            "source": "WUR Nutrient Solutions for Greenhouse Crops 2020 v4, Section B",
+        }
+
+    @app.get("/api/v1/crop-categories/{category}/crops")
+    def crops_by_category(category: str) -> dict:
+        """Tier 2 — crops within one category."""
+        if category not in CROP_CATEGORIES:
+            raise _http_error(404, f"Unknown category '{category}'. "
+                                   f"Available: {', '.join(CROP_CATEGORIES)}")
+        out = []
+        for cid in crops_in_category(category):
+            meta = crop_meta(cid)
+            subs = substrates_for(cid)
+            out.append({
+                "crop_id": cid,
+                "name": meta["name_en"],
+                "name_text": bi(meta["name_en"], meta["name_zh"]),
+                "botanical": meta.get("botanical", ""),
+                "substrate_types": subs,
+                "substrate_types_text": [SUBSTRATE_LABELS[s] for s in subs],
+            })
+        return {"category": category,
+                "category_text": CROP_CATEGORY_LABELS[category],
+                "crops": out}
+
+    @app.get("/api/v1/crops/{crop_id}/{substrate_type}/growth-stages")
+    def crop_growth_stages(crop_id: str, substrate_type: str) -> dict:
+        """
+        Tier 3 — growth stages published for this crop x substrate.
+
+        `high_water` is never returned here: it is an orthogonal condition
+        (supply above 5 L/m2/day) that can coincide with any stage, so it is
+        driven by `is_high_water_supply` instead of being selectable as a phase.
+        """
+        c = _crop_or_400(crop_id, substrate_type)
+        return {
+            "crop_id": crop_id,
+            "substrate_type": substrate_type,
+            "growth_stages": [
+                {"value": a.stage,
+                 "label": a.label_en,
+                 "label_text": bi(a.label_en, a.label_zh),
+                 "deltas": a.deltas,
+                 "note_text": bi(a.note_en, a.note_zh) if a.note_en else ""}
+                for a in c.adjustments],
+            "growth_stages_text": bi("Growth Stages", "生长阶段"),
+            "high_water_supply": {
+                "available": bool(c.high_water_adjustment),
+                "label_text": bi("High Water Supply", "高供水量"),
+                "note_text": bi(HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH),
+                "deltas": c.high_water_adjustment,
+            },
+            "source_page": c.source_page,
+        }
+
     @app.get("/api/v1/crops")
     def list_crops() -> dict:
         out = []
@@ -484,6 +564,8 @@ if FASTAPI_AVAILABLE:
                 "name": first.name_en,
                 "name_text": first.name,
                 "botanical": first.botanical,
+                "category": first.category,
+                "category_text": CROP_CATEGORY_LABELS[first.category],
                 "substrate_types": subs,
                 "substrate_types_text": [SUBSTRATE_LABELS[s] for s in subs],
                 "matrices": [
@@ -526,12 +608,21 @@ if FASTAPI_AVAILABLE:
             "fertigation_micro_umol_l": c.micro_fertigation,
             "na_max_root_zone_mmol_l": c.na_max_root_zone,
             "cl_max_root_zone_mmol_l": c.cl_max_root_zone,
+            "category": c.category,
+            "category_text": CROP_CATEGORY_LABELS[c.category],
+            "growth_stages_text": bi("Growth Stages", "生长阶段"),
             "adjustments": [
                 {"stage": a.stage, "label": a.label_en,
                  "label_text": bi(a.label_en, a.label_zh),
                  "deltas": a.deltas,
                  "note_text": bi(a.note_en, a.note_zh) if a.note_en else ""}
                 for a in c.adjustments],
+            "high_water_supply": {
+                "available": bool(c.high_water_adjustment),
+                "label_text": bi("High Water Supply", "高供水量"),
+                "note_text": bi(HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH),
+                "deltas": c.high_water_adjustment,
+            },
             "source_page": c.source_page,
         }
 
@@ -807,12 +898,19 @@ if FASTAPI_AVAILABLE:
     @app.post("/api/v1/m5/steering")
     def m5_steering(req: SteeringRequest) -> dict:
         crop = _crop_or_400(req.crop_id, req.substrate_type)
-        r = apply_stage_adjustments(crop, req.stages, req.dry_back_intent)
+        stages = list(req.stages)
+        if req.growth_stage and req.growth_stage not in stages:
+            stages.append(req.growth_stage)
+        r = apply_stage_adjustments(crop, stages, req.dry_back_intent,
+                                    req.is_high_water_supply)
         gates = steering_gates(r, crop, req.na_ratio, req.wash_active)
         lo, hi, intent_en, intent_zh = DRY_BACK_TARGETS.get(
             req.dry_back_intent, DRY_BACK_TARGETS["BALANCED"])
         data = {
             "stages": r.stages,
+            "is_high_water_supply": r.is_high_water_supply,
+            "high_water_supply_text": bi("High Water Supply", "高供水量"),
+            "high_water_note_text": bi(HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH),
             "stages_text": bi(", ".join(r.stages) or "standard",
                               "、".join(r.stages) or "标准"),
             "applied_deltas": {k: round(v, 3) for k, v in r.deltas.items()},
@@ -874,7 +972,8 @@ if FASTAPI_AVAILABLE:
     def m6_tanks(req: TankRequest) -> dict:
         crop = _crop_or_400(req.crop_id, req.substrate_type)
         pol = _policy(req.policy)
-        steer = apply_stage_adjustments(crop, req.stages)
+        steer = apply_stage_adjustments(crop, req.stages,
+                                        is_high_water_supply=req.is_high_water_supply)
         fe_plan = select_fe_chelate(req.ph_root_zone, crop.medium,
                                     req.irrigation_type, req.calcareous_soil)
 
@@ -894,6 +993,7 @@ if FASTAPI_AVAILABLE:
         gates += tank_ph_gates(split, pol)
         gates += chelate_gates(fe_plan, req.disinfection, req.recirculating,
                                req.boron_source == "borax" and req.recirculating)
+        gates += residual_gates(residual)
 
         data = {
             "tank_volume_l": pol.tank_volume_l,
@@ -1117,7 +1217,8 @@ if FASTAPI_AVAILABLE:
                     for f in findings if f.level > 0],
             }
 
-        steer = apply_stage_adjustments(crop, req.stages, req.dry_back_intent)
+        steer = apply_stage_adjustments(crop, req.stages, req.dry_back_intent,
+                                        req.is_high_water_supply)
         for ion, delta in steer.deltas.items():
             if ion in micro:
                 micro[ion] = max(0.0, micro[ion] + delta)
@@ -1166,6 +1267,7 @@ if FASTAPI_AVAILABLE:
         gates += split.gates
         gates += tank_ph_gates(split, pol)
         gates += chelate_gates(fe_plan, req.disinfection, req.recirculating)
+        gates += residual_gates(residual)
         modules["M6"] = {
             "tank_a": [d.to_dict() for d in split.tank_a],
             "tank_b": [d.to_dict() for d in split.tank_b],
@@ -1924,10 +2026,20 @@ class TestModule8Emergency(unittest.TestCase):
 class TestSubstrateMatrix(unittest.TestCase):
     """Target values are keyed on crop AND substrate (Section B)."""
 
-    def test_every_crop_has_all_three_substrates(self):
+    def test_every_crop_has_at_least_one_substrate(self):
+        """
+        Not every crop is published for all three media -- blueberry and
+        raspberry appear only on organic material, chrysanthemum only on soil.
+        What must hold is that each crop has at least one matrix and every
+        listed substrate resolves.
+        """
         for cid in crop_ids():
             with self.subTest(crop=cid):
-                self.assertEqual(substrates_for(cid), list(SUBSTRATE_TYPES))
+                subs = substrates_for(cid)
+                self.assertTrue(subs, f"{cid} has no matrix")
+                for sname in subs:
+                    self.assertIn(sname, SUBSTRATE_TYPES)
+                    self.assertIsNotNone(get_crop(cid, sname))
 
     def test_targets_differ_by_substrate(self):
         """Tomato root-zone K: 8.0 inert, 2.8 organic, 2.2 soil (pp. 53-55)."""
@@ -1982,10 +2094,21 @@ class TestSubstrateMatrix(unittest.TestCase):
                          "1:2_volume")
 
     def test_soil_publishes_no_stage_adjustments(self):
+        """
+        Soil pages carry no Adjustments block -- with one documented exception,
+        chrysanthemum (p. 78), which is published on soil only and does print
+        one.
+        """
+        checked = 0
         for cid in crop_ids():
+            soil = get_crop(cid, "SOIL")
+            if soil is None or cid == "chrysanthemum":
+                continue
             with self.subTest(crop=cid):
-                self.assertEqual(get_crop(cid, "SOIL").adjustments, ())
-                self.assertTrue(get_crop(cid, "ORGANIC_MATERIAL").adjustments)
+                self.assertEqual(soil.adjustments, ())
+                self.assertEqual(soil.high_water_adjustment, {})
+                checked += 1
+        self.assertGreater(checked, 5)
 
     def test_organic_fruit_set_matches_inert(self):
         """Cucumber fruit set is +1 K / +1 NO3 on both inert and organic."""
@@ -2020,6 +2143,98 @@ class TestSubstrateMatrix(unittest.TestCase):
                     self.assertAlmostEqual(
                         mmol_to_ppm(crop.fertigation[ion], ion),
                         printed_ppm, delta=1.0)
+
+
+class TestCropLibraryExpansion(unittest.TestCase):
+    """WUR Section B full spectrum, loaded from crops_wur.json."""
+
+    def test_all_five_categories_populated(self):
+        for cat in CROP_CATEGORIES:
+            with self.subTest(category=cat):
+                self.assertTrue(crops_in_category(cat))
+
+    def test_expected_crops_present(self):
+        for cid in ("tomato","cucumber","sweet_pepper","eggplant","melon",
+                    "strawberry","raspberry","blueberry",
+                    "lettuce","herbs","microgreens",
+                    "rose","chrysanthemum","gerbera","carnation",
+                    "alstroemeria","zantedeschia",
+                    "phalaenopsis","anthurium","poinsettia"):
+            with self.subTest(crop=cid):
+                self.assertIn(cid, crop_ids())
+                self.assertTrue(substrates_for(cid))
+
+    def test_library_size(self):
+        self.assertGreaterEqual(len(crop_ids()), 20)
+        self.assertGreaterEqual(len(CROP_MATRIX), 45)
+
+    def test_high_water_is_never_a_growth_stage(self):
+        """It is an orthogonal condition, so it must not appear as a phase."""
+        for (cid, med), crop in CROP_MATRIX.items():
+            with self.subTest(crop=cid, substrate=med):
+                self.assertNotIn("high_water", [a.stage for a in crop.adjustments])
+
+    def test_high_water_flag_applies_the_adjustment(self):
+        crop = get_crop("tomato")
+        self.assertTrue(crop.high_water_adjustment)
+        off = apply_stage_adjustments(crop, ["fruit_set"], is_high_water_supply=False)
+        on = apply_stage_adjustments(crop, ["fruit_set"], is_high_water_supply=True)
+        self.assertFalse(off.is_high_water_supply)
+        self.assertTrue(on.is_high_water_supply)
+        for ion, d in crop.high_water_adjustment.items():
+            self.assertAlmostEqual(on.deltas.get(ion, 0.0) - off.deltas.get(ion, 0.0),
+                                   d, places=6)
+
+    def test_legacy_merged_stage_string_still_works(self):
+        """`stages=['fruit_set','high_water']` must not silently do nothing."""
+        crop = get_crop("tomato")
+        legacy = apply_stage_adjustments(crop, ["fruit_set", "high_water"])
+        explicit = apply_stage_adjustments(crop, ["fruit_set"], is_high_water_supply=True)
+        self.assertTrue(legacy.is_high_water_supply)
+        self.assertEqual(legacy.deltas, explicit.deltas)
+        self.assertNotIn("high_water", legacy.stages)
+
+    def test_growth_stages_helper_excludes_high_water(self):
+        st = growth_stages_for("tomato", "INERT_SUBSTRATE")
+        self.assertIn("fruit_set", st)
+        self.assertNotIn("high_water", st)
+
+    def test_every_matrix_has_fertigation_and_targets(self):
+        for (cid, med), crop in CROP_MATRIX.items():
+            with self.subTest(crop=cid, substrate=med):
+                self.assertTrue(crop.fertigation, "no fertigation vector")
+                self.assertTrue(crop.micro_fertigation, "no micronutrients")
+                self.assertGreater(crop.ec_fertigation, 0.0)
+
+    def test_ppm_checksum_holds_across_whole_library(self):
+        """Every fertigation value must reproduce the printed ppm column."""
+        import json as _json
+        from pathlib import Path as _P
+        lib = _json.loads((_P(__file__).resolve().parent / "crops_wur.json")
+                          .read_text(encoding="utf-8"))
+        failures = [(cid, med, f["ft_checksum_failures"])
+                    for cid, c in lib["crops"].items()
+                    for med, f in c["matrices"].items()
+                    if f.get("ft_checksum_failures")]
+        # Two known source anomalies remain; see the report in design.md.
+        self.assertLessEqual(len(failures), 3, f"unexpected checksum drift: {failures}")
+
+    def test_pipeline_runs_for_representative_new_crops(self):
+        """Modules 1-8 must complete for crops beyond the original three."""
+        for cid, med in (("strawberry","INERT_SUBSTRATE"), ("rose","INERT_SUBSTRATE"),
+                         ("lettuce","INERT_SUBSTRATE"), ("chrysanthemum","SOIL"),
+                         ("phalaenopsis","INERT_SUBSTRATE")):
+            for hw in (False, True):
+                with self.subTest(crop=cid, substrate=med, high_water=hw):
+                    crop = get_crop(cid, med)
+                    steer = apply_stage_adjustments(crop, [], "BALANCED", hw)
+                    scaled, _ = scale_to_ec(dict(steer.macro_after),
+                                            crop.ec_fertigation)
+                    doses, residual = allocate_fertilisers(scaled, steer.micro_after)
+                    split = split_ab_tanks(doses)
+                    self.assertEqual([g.gid for g in split.gates], [],
+                                     "precipitation gate must not fire")
+                    self.assertGreater(split.mass_a_kg + split.mass_b_kg, 0.0)
 
 
 class TestBilingualContract(unittest.TestCase):

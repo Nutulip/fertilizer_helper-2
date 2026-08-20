@@ -24,6 +24,7 @@ from constants import (
     ANIONS, ATOMIC_WEIGHTS, CATIONS, DEFAULT_POLICY, DEFAULT_SUBSTRATE,
     EC_DIVISOR, get_crop,
     FERTILISERS, FE_CHELATE_SWITCH_PH, ION_BALANCE_TOLERANCE, ION_CHARGE,
+    HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH,
     NA_EC_FACTOR, NA_LIMITS_MMOL_L, PROPHYLACTIC_NFT, PROPHYLACTIC_SUBSTRATE,
     reference_irrigation,
     REFERENCE_EC_OFFSET, WATER_QUALITY_LEVELS, CropRecipe, Fertiliser,
@@ -945,11 +946,13 @@ class SteeringResult:
     dry_back_min: float
     dry_back_max: float
     notes: list[tuple[str, str]]
+    is_high_water_supply: bool = False
 
 
 def apply_stage_adjustments(crop: CropRecipe,
                             stages: list[str],
-                            dry_back_intent: str = "BALANCED") -> SteeringResult:
+                            dry_back_intent: str = "BALANCED",
+                            is_high_water_supply: bool = False) -> SteeringResult:
     """
     Fruit Set K:N shift for cucumber and sweet pepper is +1 mmol/L K and
     +1 mmol/L N-NO3 — exactly 1.0 mmol/L of KNO3. Tomato's Fruit Set column
@@ -964,6 +967,11 @@ def apply_stage_adjustments(crop: CropRecipe,
     notes: list[tuple[str, str]] = []
 
     for stage in stages:
+        if stage == "high_water":
+            # Accepted for backwards compatibility, but it is a condition, not
+            # a stage; route it through the dedicated flag instead.
+            is_high_water_supply = True
+            continue
         adj = next((a for a in crop.adjustments if a.stage == stage), None)
         if adj is None:
             continue
@@ -971,6 +979,12 @@ def apply_stage_adjustments(crop: CropRecipe,
             combined[ion] = combined.get(ion, 0.0) + delta
         if adj.note_en:
             notes.append((adj.note_en, adj.note_zh))
+
+    # High water supply stacks ON TOP of whatever stage is active.
+    if is_high_water_supply and crop.high_water_adjustment:
+        for ion, delta in crop.high_water_adjustment.items():
+            combined[ion] = combined.get(ion, 0.0) + delta
+        notes.append((HIGH_WATER_NOTE_EN, HIGH_WATER_NOTE_ZH))
 
     for ion, delta in combined.items():
         if ion in MICRO_IONS:
@@ -987,7 +1001,8 @@ def apply_stage_adjustments(crop: CropRecipe,
                                         DRY_BACK_TARGETS["BALANCED"])
 
     return SteeringResult(
-        stages=stages, deltas=combined,
+        stages=[s for s in stages if s != "high_water"],
+        is_high_water_supply=is_high_water_supply, deltas=combined,
         macro_before=macro_before, macro_after=macro,
         micro_before=micro_before, micro_after=micro,
         k_ca_ratio=k_ca, k_n_ratio=k_n,
@@ -1790,6 +1805,45 @@ def screen_antagonism(m: dict[str, float], ph: float,
     if ph > 6.5:
         add("HIGH_PH_LIMITS_P_MICRO", {"ph": ph})
     return out
+
+
+def residual_gates(residual: dict[str, float],
+                   tolerance: float = 0.05) -> list[Gate]:
+    """
+    Ions the fertiliser allocation could not land exactly on target.
+
+    A negative residual means OVER-supply: the greedy order (Ch. 8, p. 28)
+    fixed that ion through a co-delivered salt before its own turn came up.
+    Nitrate is the usual case -- acid and calcium nitrate can together exceed
+    the NO3 target, leaving potassium nitrate nothing left to close with.
+    Reported rather than silently absorbed.
+    """
+    notable = {i: v for i, v in residual.items() if abs(v) > tolerance}
+    if not notable:
+        return []
+    over = {i: -v for i, v in notable.items() if v < 0}
+    under = {i: v for i, v in notable.items() if v > 0}
+    parts_en, parts_zh = [], []
+    if over:
+        parts_en.append("over-supplied: " + ", ".join(f"{i} +{v:.2f}" for i, v in over.items()))
+        parts_zh.append("过量供给：" + "、".join(f"{i} +{v:.2f}" for i, v in over.items()))
+    if under:
+        parts_en.append("not fully supplied: " + ", ".join(f"{i} {v:.2f}" for i, v in under.items()))
+        parts_zh.append("供给不足：" + "、".join(f"{i} {v:.2f}" for i, v in under.items()))
+    return [Gate(
+        "G-ALLOCATION-RESIDUAL", "WARNING",
+        "Fertiliser allocation did not close exactly", "肥料配比未完全闭合",
+        "The chosen fertilisers cannot hit every target simultaneously (mmol/L) - "
+        + "; ".join(parts_en) + ". Co-delivered ions from acid and calcium "
+        "nitrate are the usual cause.",
+        "所选肥料无法同时满足所有目标值（mmol/L）——" + "；".join(parts_zh)
+        + "。通常源于酸与硝酸钙带入的伴随离子。",
+        {i: round(v, 3) for i, v in notable.items()},
+        "Substitute a fertiliser that carries less of the over-supplied ion "
+        "(e.g. phosphoric for nitric acid, or calcium chloride for part of the "
+        "calcium nitrate), or accept the deviation if it is within crop tolerance.",
+        "改用伴随离子较少的肥料（如以磷酸替代硝酸，或以氯化钙替代部分硝酸钙），"
+        "或在作物耐受范围内接受该偏差。")]
 
 
 def ion_balance_gates(recipe: dict[str, float]) -> list[Gate]:
