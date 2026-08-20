@@ -841,13 +841,73 @@ Operating bands (site policy, defaults shown):
 | **≥ 2.0** | **Trigger dynamic wash** | **raise to 30–35 %** |
 | ≥ 3.0 | Aggressive wash + investigate cause | 35 % and re-analyse within 24 h |
 
+#### 6.3.3 Wash irrigation increment — uptake is the conserved quantity
+
+To lift the leaching fraction you must add water. The quantity that stays
+fixed over the short term is **plant uptake**, not drain:
+
+```
+V_uptake     = V_irrigation × (1 − LF_current)
+V_target_irr = V_uptake / (1 − LF_target)
+ΔV_extra     = V_irrigation × ( (1 − LF_current) / (1 − LF_target) − 1 )
+```
+
+`LF_target` is the midpoint of the wash band, 32.5% (`policy.wash_lf_target`).
+`ΔV_extra` is 0 when `LF_current ≥ LF_target`.
+
+> **Do not pin drain volume.** Solving `V_needed = V_drain / LF_target` holds
+> drain constant and inverts the agronomy. At `V_irr = 4.0`, `V_drain = 1.04`
+> (LF 26%), it returns 3.47 L/m² — i.e. that salts are flushed by irrigating
+> *less* — so the increment computed as `max(0, 3.47 − 4.0)` is **0.00**, and
+> the wash instruction silently does nothing. Uptake is what the crop fixes;
+> drain is the residual. Regression-tested in
+> `TestWashIrrigationIncrement.test_old_drain_pinned_formula_would_return_zero`.
+
+Worked example (LF 26% → 32.5%):
+
+| Quantity | Value |
+|---|---|
+| `V_irrigation` | 4.00 L/m²/day |
+| `V_drain` | 1.04 L/m²/day |
+| `LF_current` | 26.0 % |
+| `V_uptake` (held constant) | 2.96 L/m²/day |
+| `V_target_irr` = 2.96 / 0.675 | 4.385 L/m²/day |
+| **`ΔV_extra`** | **0.385 L/m²/day** |
+
+#### 6.3.4 Reference irrigation fallback `SRC:PRACTICE`
+
+When the operator leaves the irrigation volume blank or zero, a crop- and
+stage-keyed reference volume stands in so the increment can still be estimated.
+The result carries `is_estimated_volume: true` and the UI badges it
+*"Estimated based on crop stage default (基于默认灌溉量估算)"*.
+
+| Crop | start | fruit_set | high_water | end_season | standard |
+|---|---|---|---|---|---|
+| Tomato | 1.5 | **3.8** | 5.5 | 2.5 | 3.8 |
+| Cucumber | 1.5 | 4.0 | 5.5 | 2.5 | 4.0 |
+| Sweet Pepper | 1.3 | 3.5 | 5.5 | 2.2 | 3.5 |
+
+Units L/m²/day. Unknown crop → 3.5. Stages stack, and the **highest** demand
+wins: a crop in fruit set during a heat wave is watered to the heat wave.
+
+The manual publishes no irrigation volumes. Its one anchor is the crop-page
+note that high water supply means **above 5 L/m²/day** (e.g. p. 41), which is
+why every `high_water` entry is 5.5 rather than the 3.8 originally proposed for
+that column — 3.8 would contradict the stage's own published definition.
+Everything else here is grower practice, overridable through
+`SitePolicy.reference_irrigation_overrides`.
+
 ```python
-def evaluate_lf(v_drain, v_irrigation, ec_drain, ec_drip, policy) -> M3Result:
+def evaluate_leaching(v_irrigation, v_drain, ec_drip, ec_drain,
+                      policy, crop_id=None, stages=None) -> LeachingResult:
+    is_estimated = v_irrigation is None or v_irrigation <= 0
+    if is_estimated:
+        v_irrigation = reference_irrigation(crop_id, stages, policy...)
     lf = 100.0 * v_drain / v_irrigation
     delta_ec = ec_drain - ec_drip
-    if delta_ec >= policy.wash_trigger_delta_ec:      # default 2.0
-        target_lf = policy.wash_lf_range              # default (30.0, 35.0)
-        gate = Gate(id="G-WASH-TRIGGER", severity="CRITICAL", ...)
+    wash = delta_ec >= policy.wash_trigger_delta_ec
+    extra = extra_irrigation_for_target_lf(
+        v_irrigation, lf / 100.0, policy.wash_lf_target / 100.0) if wash else 0.0
     ...
 ```
 

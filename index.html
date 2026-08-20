@@ -388,9 +388,11 @@ tailwind.config = {
       <div>
         <label class="block text-xs font-semibold text-slate-600 mb-1">
           Irrigation Volume (灌溉量)</label>
-        <input id="lfIrrig" type="number" step="0.1" min="0.1" max="200" value="10"
+        <input id="lfIrrig" type="number" step="0.1" min="0" max="200" value="4.0"
           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-600 focus:border-brand-600">
-        <p class="mt-0.5 text-[10px] text-slate-400">L/m²/day</p>
+        <p class="mt-0.5 text-[10px] text-slate-400">
+          L/m²/day — leave blank or 0 to estimate from crop stage
+          <span class="block">(留空或填 0 则按作物阶段估算)</span></p>
       </div>
       <div>
         <label class="block text-xs font-semibold text-slate-600 mb-1">
@@ -1414,23 +1416,40 @@ async function runModule2() {
 
 /* ══════════════════ MODULE 3 — LEACHING FRACTION ══════════════════ */
 
-async function runModule3() {
-  const vi = readNum('lfIrrig',   { required:true });
-  const vd = readNum('lfDrain',   { required:true });
+/** Debounced live recalculation for Tab 4 inputs. */
+let _lfTimer = null;
+function scheduleModule3(delay = 450) {
+  clearTimeout(_lfTimer);
+  _lfTimer = setTimeout(() => { runModule3({ quiet: true }); }, delay);
+}
+
+async function runModule3(opts = {}) {
+  // Irrigation volume is optional: blank or 0 falls back to a crop-stage
+  // reference volume, which the response flags as estimated.
+  const vi = readNum('lfIrrig');
+  const vd = readNum('lfDrain');
   const ed = readNum('lfEcDrip',  { required:true });
   const er = readNum('lfEcDrain', { required:true });
-  if ([vi, vd, ed, er].some(v => Number.isNaN(v) || v === null)) {
+  if ([ed, er].some(v => Number.isNaN(v) || v === null) || Number.isNaN(vi) || Number.isNaN(vd)) {
+    if (opts.quiet) return;
     return errorCard('out4', new Error('Fix the highlighted fields first (请先修正标红的输入项)'));
   }
-  if (vd > vi) {
+  const irrigation = (vi === null || vi <= 0) ? null : vi;
+  const drain = vd || 0;
+  if (irrigation !== null && drain > irrigation) {
     fieldError($('lfDrain'), 'Drain cannot exceed irrigation (排液量不得大于灌溉量)');
+    if (opts.quiet) return;
     return errorCard('out4', new Error('Drain volume cannot exceed irrigation volume (排液量不得大于灌溉量)'));
   }
-  busy('out4', 'Calculating leaching fraction… (正在计算排液比…)');
+  fieldError($('lfDrain'), '');
+  if (!opts.quiet) busy('out4', 'Calculating leaching fraction… (正在计算排液比…)');
   try {
     const r = await api('/api/v1/m3/leaching', {
-      irrigation_volume_l_m2: vi, drain_volume_l_m2: vd,
+      irrigation_volume_l_m2: irrigation, drain_volume_l_m2: drain,
       ec_dripper: ed, ec_drain: er,
+      // Needed for the reference-volume fallback when irrigation is blank.
+      crop_id: $('cropSelect').value || null,
+      stages: selectedStages(),
     });
     const d = r.data;
     const lfTone = d.band === 'DEFICIT' || d.band === 'EXCESS' ? 'text-amber-700'
@@ -1461,10 +1480,60 @@ async function runModule3() {
         <div class="flex justify-between text-[10px] text-slate-400 mt-1">
           <span>0%</span><span>10%</span><span>20%</span><span>30%</span><span>40%</span><span>50%+</span>
         </div>
+        ${d.wash_required ? `
+        <div class="mt-4 rounded-xl border-2 border-amber-500 bg-gradient-to-br from-amber-50 to-red-50 p-4">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-bold px-2 py-1 rounded bg-red-600 text-white">⚡ G-WASH-TRIGGER</span>
+            <span class="text-xs font-semibold text-amber-900">${esc(d.target_lf_pct_text)}</span>
+          </div>
+          <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="rounded-lg bg-white/80 border border-amber-300 p-3">
+              <p class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">
+                Current Irrigation (当前灌溉量)</p>
+              <p class="mt-1 text-2xl font-bold tabular-nums text-slate-700">
+                ${fmt(d.used_irrigation_l_m2, 2)}<span class="text-sm font-normal"> L/m²</span></p>
+              ${d.is_estimated_volume ? `<p class="mt-1 text-[10px] font-semibold text-amber-800 bg-amber-100 rounded px-1.5 py-0.5 inline-block">
+                ${esc(d.is_estimated_volume_text)}</p>` : ''}
+            </div>
+            <div class="rounded-lg bg-white border-2 border-red-400 p-3">
+              <p class="text-[11px] uppercase tracking-wide text-red-700 font-semibold">
+                Extra Irrigation Needed (需增加灌溉量)</p>
+              <p class="mt-1 text-3xl font-black tabular-nums text-red-700">
+                +${fmt(d.extra_irrigation_l_m2, 2)}<span class="text-sm font-normal"> L/m²</span></p>
+              <p class="mt-0.5 text-[10px] text-slate-500">per day (每日)</p>
+            </div>
+            <div class="rounded-lg bg-white/80 border border-amber-300 p-3">
+              <p class="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">
+                Target Irrigation (目标灌溉量)</p>
+              <p class="mt-1 text-2xl font-bold tabular-nums text-emerald-700">
+                ${fmt(d.target_irrigation_l_m2, 2)}<span class="text-sm font-normal"> L/m²</span></p>
+              <p class="mt-0.5 text-[10px] text-slate-500">
+                → LF ${fmt(d.target_lf_pct, 1)}%</p>
+            </div>
+          </div>
+          ${d.is_estimated_volume ? `<p class="mt-3 text-[11px] text-amber-900 bg-amber-100 border border-amber-300 rounded-lg p-2 leading-snug">
+            <span class="font-bold">⚠</span> Irrigation volume was not supplied, so a crop-stage
+            reference volume of ${fmt(d.used_irrigation_l_m2, 2)} L/m²/day was used.
+            Verify against your own metering before acting.
+            <span class="block text-amber-700">（未提供灌溉量，已采用作物阶段参考值
+            ${fmt(d.used_irrigation_l_m2, 2)} L/m²/天 估算；执行前请与实际计量核对。）</span>
+          </p>` : ''}
+          <p class="mt-2 text-[10px] font-mono text-slate-500">${esc(d.formula_extra_text)}</p>
+          <p class="mt-0.5 text-[10px] text-slate-500">
+            ${esc(d.uptake_text)} — ${fmt(d.uptake_l_m2, 2)} L/m²</p>
+        </div>` : ''}
         <div class="mt-4">${kv([
           ['Wash Trigger (冲洗触发阈值)', `ΔEC ≥ ${d.wash_trigger_delta_ec} mS/cm`],
-          ['Target LF When Washing (冲洗目标排液比)', `${d.target_lf_pct_min}–${d.target_lf_pct_max}%`],
-          ['Extra Irrigation Needed (需增加灌溉量)', `${fmt(d.extra_irrigation_l_m2, 2)} L/m²`],
+          ['Target LF When Washing (冲洗目标排液比)',
+            `${d.target_lf_pct_min}–${d.target_lf_pct_max}% (aim ${fmt(d.target_lf_pct, 1)}%)`],
+          ['Irrigation Volume Used (采用的灌溉量)',
+            `${fmt(d.used_irrigation_l_m2, 2)} L/m²${d.is_estimated_volume ? ' *' : ''}`,
+            d.is_estimated_volume ? 'text-amber-700' : ''],
+          ['Drain Volume (排液量)', `${fmt(d.drain_l_m2, 2)} L/m²`],
+          ['Plant Uptake (作物吸水量)', `${fmt(d.uptake_l_m2, 2)} L/m²`],
+          ['Extra Irrigation Needed (需增加灌溉量)',
+            `<span class="${d.extra_irrigation_l_m2 > 0 ? 'text-red-700 text-base' : ''}">${fmt(d.extra_irrigation_l_m2, 2)} L/m²</span>`],
+          ['Target Irrigation (目标灌溉量)', `${fmt(d.target_irrigation_l_m2, 2)} L/m²`],
         ])}</div>
         <p class="mt-3 text-[11px] font-mono text-slate-500 bg-slate-50 rounded p-2">${esc(d.formula_text)}</p>
         <p class="mt-2 text-[11px] text-amber-700">${esc(d.provenance_text)}</p>
@@ -1683,6 +1752,13 @@ function init() {
     el.insertAdjacentHTML('afterend', '<p data-err class="text-[10px] text-red-600 mt-0.5 min-h-[12px]"></p>');
     el.addEventListener('input', () => { readNum(el); if (id === 'rzEC' || id === 'rzPH') liveStatus(); });
     el.addEventListener('keydown', ev => { if (ev.key === '-' || ev.key === 'e') ev.preventDefault(); });
+  });
+
+  // Tab 4 recalculates as the grower types, so the wash increment always
+  // reflects what is on screen rather than the last button press.
+  ['lfIrrig', 'lfDrain', 'lfEcDrip', 'lfEcDrain'].forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('input', () => scheduleModule3());
   });
 
   document.addEventListener('keydown', ev => {

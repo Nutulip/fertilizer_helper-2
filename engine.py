@@ -25,6 +25,7 @@ from constants import (
     EC_DIVISOR, get_crop,
     FERTILISERS, FE_CHELATE_SWITCH_PH, ION_BALANCE_TOLERANCE, ION_CHARGE,
     NA_EC_FACTOR, NA_LIMITS_MMOL_L, PROPHYLACTIC_NFT, PROPHYLACTIC_SUBSTRATE,
+    reference_irrigation,
     REFERENCE_EC_OFFSET, WATER_QUALITY_LEVELS, CropRecipe, Fertiliser,
     SitePolicy, bi,
 )
@@ -603,7 +604,13 @@ class LeachingResult:
     wash_required: bool
     target_lf_min: float
     target_lf_max: float
+    target_lf_pct: float
     extra_irrigation_l_m2: float
+    target_irrigation_l_m2: float
+    used_irrigation_l_m2: float
+    drain_l_m2: float
+    uptake_l_m2: float
+    is_estimated_volume: bool
 
 
 LF_BANDS = [
@@ -615,34 +622,91 @@ LF_BANDS = [
 ]
 
 
-def evaluate_leaching(v_irrigation_l_m2: float,
+def extra_irrigation_for_target_lf(v_irrigation_l_m2: float,
+                                   lf_current_frac: float,
+                                   lf_target_frac: float) -> float:
+    """
+    Additional daily irrigation needed to lift the leaching fraction from
+    `lf_current_frac` to `lf_target_frac`, in L/m2.
+
+    Plant uptake is the conserved quantity over the short term, not drain:
+
+        V_uptake     = V_irrigation x (1 - LF_current)
+        V_target_irr = V_uptake / (1 - LF_target)
+        dV_extra     = V_irrigation x ((1 - LF_current)/(1 - LF_target) - 1)
+
+    Pinning DRAIN instead of uptake — the previous behaviour — inverts the
+    agronomy. With V_irr 4.0 and drain 1.04 (LF 26%), holding drain fixed says
+    3.47 L/m2 reaches LF 30%, i.e. that salts are flushed by irrigating LESS.
+    Uptake is what the crop actually fixes; drain is the residual.
+
+    Returns 0.0 when the current LF already meets or exceeds the target.
+    """
+    if v_irrigation_l_m2 <= EPS:
+        return 0.0
+    if lf_current_frac >= lf_target_frac:
+        return 0.0
+    if lf_target_frac >= 1.0 - EPS:
+        # LF = 100% means zero uptake; the ratio is undefined.
+        raise ValueError("Target leaching fraction must be below 100%")
+    ratio = (1.0 - lf_current_frac) / (1.0 - lf_target_frac)
+    return max(0.0, v_irrigation_l_m2 * (ratio - 1.0))
+
+
+def evaluate_leaching(v_irrigation_l_m2: float | None,
                       v_drain_l_m2: float,
                       ec_drip: float,
                       ec_drain: float,
-                      policy: SitePolicy = DEFAULT_POLICY) -> LeachingResult:
-    """LF = (V_drain / V_irrigation) * 100%."""
-    if v_irrigation_l_m2 <= EPS:
-        raise ValueError("Irrigation volume must be greater than zero")
+                      policy: SitePolicy = DEFAULT_POLICY,
+                      crop_id: str | None = None,
+                      stages: list[str] | tuple[str, ...] | None = None
+                      ) -> LeachingResult:
+    """
+    LF = (V_drain / V_irrigation) * 100%.
+
+    When the irrigation volume is missing or zero, a crop- and stage-based
+    reference volume stands in so the wash increment can still be estimated;
+    the result is flagged `is_estimated_volume`.
+    """
+    is_estimated = v_irrigation_l_m2 is None or v_irrigation_l_m2 <= EPS
+    if is_estimated:
+        v_irrigation_l_m2 = reference_irrigation(
+            crop_id or "", stages, policy.reference_irrigation_overrides)
+        if v_irrigation_l_m2 <= EPS:
+            raise ValueError("No irrigation volume supplied and no reference "
+                             "volume available")
+
+    v_drain_l_m2 = max(0.0, v_drain_l_m2)
+    if v_drain_l_m2 > v_irrigation_l_m2:
+        raise ValueError("Drain volume cannot exceed irrigation volume")
+
     lf = 100.0 * v_drain_l_m2 / v_irrigation_l_m2
     delta_ec = ec_drain - ec_drip
+    uptake = v_irrigation_l_m2 - v_drain_l_m2
 
     band = next(code for lo, hi, code, _, _ in LF_BANDS if lo <= lf < hi)
     # Tolerance so that an exact-threshold reading such as 4.6 - 2.6 (which is
     # 1.9999999999999996 in binary floating point) still trips the trigger.
     wash = delta_ec >= policy.wash_trigger_delta_ec - 1e-9
 
+    target_lf_pct = policy.wash_lf_target
     extra = 0.0
-    if wash and lf < policy.wash_lf_min:
-        # Volume needed to reach the lower bound of the wash band, holding
-        # drain volume proportional to the new irrigation volume.
-        target = policy.wash_lf_min / 100.0
-        needed = v_drain_l_m2 / target if target > EPS else v_irrigation_l_m2
-        extra = max(0.0, needed - v_irrigation_l_m2)
+    target_irrigation = v_irrigation_l_m2
+    if wash:
+        extra = extra_irrigation_for_target_lf(
+            v_irrigation_l_m2, lf / 100.0, target_lf_pct / 100.0)
+        target_irrigation = v_irrigation_l_m2 + extra
 
     return LeachingResult(
         lf_pct=lf, delta_ec=delta_ec, band=band, wash_required=wash,
         target_lf_min=policy.wash_lf_min, target_lf_max=policy.wash_lf_max,
+        target_lf_pct=target_lf_pct,
         extra_irrigation_l_m2=extra,
+        target_irrigation_l_m2=target_irrigation,
+        used_irrigation_l_m2=v_irrigation_l_m2,
+        drain_l_m2=v_drain_l_m2,
+        uptake_l_m2=uptake,
+        is_estimated_volume=is_estimated,
     )
 
 
@@ -657,10 +721,24 @@ def leaching_gates(r: LeachingResult, policy: SitePolicy = DEFAULT_POLICY) -> li
             f"accumulating in the root zone.",
             f"排液与滴灌电导差为 {r.delta_ec:.2f} mS/cm，达到或超过 "
             f"{policy.wash_trigger_delta_ec:g} mS/cm 触发阈值。根际正在积盐。",
-            {"delta_ec": round(r.delta_ec, 2), "lf_pct": round(r.lf_pct, 1)},
+            {"delta_ec": round(r.delta_ec, 2), "lf_pct": round(r.lf_pct, 1),
+             "extra_irrigation_l_m2": round(r.extra_irrigation_l_m2, 2),
+             "target_irrigation_l_m2": round(r.target_irrigation_l_m2, 2)},
             f"Raise the leaching fraction to {r.target_lf_min:g}-{r.target_lf_max:g}% "
-            f"until the EC gap closes.",
-            f"将排液比提高至 {r.target_lf_min:g}-{r.target_lf_max:g}%，直至电导差回落。",
+            f"(target {r.target_lf_pct:g}%): add "
+            f"{r.extra_irrigation_l_m2:.2f} L/m2/day, taking irrigation from "
+            f"{r.used_irrigation_l_m2:.2f} to {r.target_irrigation_l_m2:.2f} "
+            f"L/m2/day, until the EC gap closes."
+            + (" Irrigation volume was not supplied, so a crop-stage reference "
+               "volume was used — verify against your own metering."
+               if r.is_estimated_volume else ""),
+            f"将排液比提高至 {r.target_lf_min:g}-{r.target_lf_max:g}%"
+            f"（目标 {r.target_lf_pct:g}%）：每日增加 "
+            f"{r.extra_irrigation_l_m2:.2f} L/m2，灌溉量由 "
+            f"{r.used_irrigation_l_m2:.2f} 提高至 {r.target_irrigation_l_m2:.2f} "
+            f"L/m2/天，直至电导差回落。"
+            + ("（未提供灌溉量，已采用作物阶段参考值估算，请与实际计量核对。）"
+               if r.is_estimated_volume else ""),
             "SRC:PRACTICE"))
     if r.band == "DEFICIT":
         gates.append(Gate(

@@ -739,6 +739,66 @@ def substrates_for(crop_id: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Reference daily irrigation volumes — SRC:PRACTICE
+#
+# The manual publishes no irrigation volumes. Its single anchor is the note on
+# the crop pages that "adjustments for high water supply are recommended when
+# water supply exceeds 5 l/m2/day" (e.g. p. 41), which fixes what "high water"
+# means but says nothing about the other stages.
+#
+# These figures are therefore grower-practice defaults, used ONLY as a fallback
+# when the operator leaves the irrigation volume blank, so that the wash-cycle
+# increment can still be estimated. Any result derived from them is flagged
+# `is_estimated_volume` so the UI can badge it. Override per site through
+# SitePolicy.reference_irrigation_overrides.
+# --------------------------------------------------------------------------
+
+REFERENCE_IRRIGATION_L_M2_DAY: dict[str, dict[str, float]] = {
+    #                 start  fruit_set  high_water  end_season  standard
+    "tomato":       {"start": 1.5, "fruit_set": 3.8, "high_water": 5.5,
+                     "end_season": 2.5, "standard": 3.8},
+    "cucumber":     {"start": 1.5, "fruit_set": 4.0, "high_water": 5.5,
+                     "end_season": 2.5, "standard": 4.0},
+    "sweet_pepper": {"start": 1.3, "fruit_set": 3.5, "high_water": 5.5,
+                     "end_season": 2.2, "standard": 3.5},
+}
+
+# Used when the crop itself is unknown.
+REFERENCE_IRRIGATION_FALLBACK = 3.5
+
+# NOTE ON `high_water`: the manual defines this stage as supply ABOVE
+# 5 L/m2/day, so 5.5 is the smallest value consistent with the source. The
+# original specification suggested 3.80 for both fruit_set and high_water;
+# 3.80 is used for fruit_set as specified, but applying it to high_water would
+# contradict the stage's own published definition, so high_water keeps 5.5.
+
+
+def reference_irrigation(crop_id: str,
+                         stages: list[str] | tuple[str, ...] | None = None,
+                         overrides: dict[str, dict[str, float]] | None = None) -> float:
+    """
+    Fallback daily irrigation volume in L/m2/day for a crop at given stage(s).
+
+    Stages stack in this system, so when several are active the highest
+    demand wins — a crop in fruit set during a heat wave is watered to the
+    heat wave, not to the average of the two.
+    """
+    table = dict(REFERENCE_IRRIGATION_L_M2_DAY)
+    if overrides:
+        for cid, per_stage in overrides.items():
+            table[cid] = {**table.get(cid, {}), **per_stage}
+
+    per_stage = table.get(crop_id)
+    if per_stage is None:
+        return REFERENCE_IRRIGATION_FALLBACK
+
+    active = [s for s in (stages or []) if s in per_stage]
+    if not active:
+        return per_stage.get("standard", REFERENCE_IRRIGATION_FALLBACK)
+    return max(per_stage[s] for s in active)
+
+
+# --------------------------------------------------------------------------
 # Site policy — practice-layer defaults (SRC:PRACTICE, see design.md 2.2 D-4)
 # --------------------------------------------------------------------------
 
@@ -758,6 +818,11 @@ class SitePolicy:
     wash_trigger_delta_ec: float = 2.0
     wash_lf_min: float = 30.0
     wash_lf_max: float = 35.0
+    # Midpoint of the wash band; what the extra-irrigation calculation aims at.
+    wash_lf_target: float = 32.5
+    # {crop_id: {stage: L/m2/day}} — overrides REFERENCE_IRRIGATION_L_M2_DAY
+    reference_irrigation_overrides: dict[str, dict[str, float]] = field(
+        default_factory=dict)
 
     # M4 — correction bands (SRC:WUR p. 22 thresholds, midpoint defaults)
     band1_default: float = 0.125              # within 10-15%

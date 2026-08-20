@@ -36,11 +36,13 @@ from constants import (
     ELEMENTAL_TO_OXIDE, EXTRACT_METHOD_LABELS, EXTRACT_METHODS, FERTILISERS,
     FE_CHELATE_BANDS,
     NA_LIMITS_MMOL_L, OXIDE_TO_ELEMENTAL, SUBSTRATE_LABELS, SUBSTRATE_TYPES,
+    reference_irrigation,
     WATER_QUALITY_LEVELS, SitePolicy, bi, crop_ids, get_crop, substrates_for,
 )
 from engine import (
     DRY_BACK_TARGETS, Gate, LF_BANDS, acid_gates, allocate_fertilisers,
     acid_molarity_mol_per_l, acid_volume_direct_l,
+    extra_irrigation_for_target_lf,
     apply_corrections, apply_stage_adjustments, balance_report,
     base_water_excess, base_water_excess_gates,
     cation_balance_pct, chelate_gates, classify_water, convert_analysis_to_mmol,
@@ -218,10 +220,14 @@ if FASTAPI_AVAILABLE:
         policy: dict | None = None
 
     class LeachingRequest(BaseModel):
-        irrigation_volume_l_m2: float
-        drain_volume_l_m2: float
+        # Optional: when blank or zero, a crop-stage reference volume is used
+        # and the result is flagged `is_estimated_volume`.
+        irrigation_volume_l_m2: float | None = None
+        drain_volume_l_m2: float = 0.0
         ec_dripper: float
         ec_drain: float
+        crop_id: str | None = None
+        stages: list[str] = Field(default_factory=list)
         policy: dict | None = None
 
     class CorrectionRequest(BaseModel):
@@ -672,8 +678,13 @@ if FASTAPI_AVAILABLE:
     @app.post("/api/v1/m3/leaching")
     def m3_leaching(req: LeachingRequest) -> dict:
         pol = _policy(req.policy)
-        r = evaluate_leaching(req.irrigation_volume_l_m2, req.drain_volume_l_m2,
-                              req.ec_dripper, req.ec_drain, pol)
+        try:
+            r = evaluate_leaching(req.irrigation_volume_l_m2,
+                                  req.drain_volume_l_m2,
+                                  req.ec_dripper, req.ec_drain, pol,
+                                  crop_id=req.crop_id, stages=req.stages)
+        except ValueError as exc:
+            raise _http_error(422, str(exc))
         gates = leaching_gates(r, pol)
         data = {
             "leaching_fraction_pct": round(r.lf_pct, 2),
@@ -692,7 +703,33 @@ if FASTAPI_AVAILABLE:
             "wash_trigger_delta_ec": pol.wash_trigger_delta_ec,
             "target_lf_pct_min": r.target_lf_min,
             "target_lf_pct_max": r.target_lf_max,
+            "target_lf_pct": r.target_lf_pct,
+            "target_lf_pct_text": bi(
+                f"Wash target {r.target_lf_pct:g}% "
+                f"(band {r.target_lf_min:g}-{r.target_lf_max:g}%)",
+                f"冲洗目标 {r.target_lf_pct:g}%"
+                f"（区间 {r.target_lf_min:g}-{r.target_lf_max:g}%）"),
             "extra_irrigation_l_m2": round(r.extra_irrigation_l_m2, 2),
+            "extra_irrigation_text": bi(
+                f"Add {r.extra_irrigation_l_m2:.2f} L/m2/day",
+                f"每日增加 {r.extra_irrigation_l_m2:.2f} L/m2"),
+            "target_irrigation_l_m2": round(r.target_irrigation_l_m2, 2),
+            "target_irrigation_text": bi(
+                f"Raise irrigation to {r.target_irrigation_l_m2:.2f} L/m2/day",
+                f"将灌溉量提高至 {r.target_irrigation_l_m2:.2f} L/m2/天"),
+            "used_irrigation_l_m2": round(r.used_irrigation_l_m2, 2),
+            "drain_l_m2": round(r.drain_l_m2, 2),
+            "uptake_l_m2": round(r.uptake_l_m2, 2),
+            "uptake_text": bi(
+                "Plant uptake held constant (assumed short-term invariant)",
+                "作物吸水量视为短期恒定"),
+            "is_estimated_volume": r.is_estimated_volume,
+            "is_estimated_volume_text": bi(
+                "Estimated based on crop stage default",
+                "基于默认灌溉量估算") if r.is_estimated_volume else "",
+            "formula_extra_text": bi(
+                "dV = V_irr x ((1 - LF_current) / (1 - LF_target) - 1)",
+                "增量 = 灌溉量 ×（(1 - 当前排液比) / (1 - 目标排液比) - 1）"),
             "provenance": "SRC:PRACTICE - not present in the WUR manual",
             "provenance_text": bi(
                 "Practice default - not present in the WUR manual",
@@ -1041,11 +1078,13 @@ if FASTAPI_AVAILABLE:
 
         # --- M3 leaching ---
         wash_active = False
-        if (req.irrigation_volume_l_m2 and req.drain_volume_l_m2 is not None
-                and req.ec_dripper is not None and req.ec_drain is not None):
+        # Volumes may be absent — the reference volume covers that case, so only
+        # the two EC readings are strictly required here.
+        if req.ec_dripper is not None and req.ec_drain is not None:
             lf = evaluate_leaching(req.irrigation_volume_l_m2,
-                                   req.drain_volume_l_m2,
-                                   req.ec_dripper, req.ec_drain, pol)
+                                   req.drain_volume_l_m2 or 0.0,
+                                   req.ec_dripper, req.ec_drain, pol,
+                                   crop_id=req.crop_id, stages=req.stages)
             gates += leaching_gates(lf, pol)
             wash_active = lf.wash_required
             modules["M3"] = {
@@ -1053,6 +1092,11 @@ if FASTAPI_AVAILABLE:
                 "delta_ec_ms_cm": round(lf.delta_ec, 3),
                 "band": lf.band, "band_text": STATUS_TEXT[lf.band],
                 "wash_required": lf.wash_required,
+                "target_lf_pct": lf.target_lf_pct,
+                "extra_irrigation_l_m2": round(lf.extra_irrigation_l_m2, 2),
+                "target_irrigation_l_m2": round(lf.target_irrigation_l_m2, 2),
+                "used_irrigation_l_m2": round(lf.used_irrigation_l_m2, 2),
+                "is_estimated_volume": lf.is_estimated_volume,
             }
 
         # --- M4 corrections + M5 steering ---
@@ -1568,6 +1612,104 @@ class TestModule3Leaching(unittest.TestCase):
         self.assertTrue(r.wash_required)
         # 1.5 L drain at 30% LF needs 5.0 L irrigation -> already above, so 0
         self.assertGreaterEqual(r.extra_irrigation_l_m2, 0.0)
+
+
+class TestWashIrrigationIncrement(unittest.TestCase):
+    """
+    Regression: `Extra Irrigation Needed` used to read 0.00 L/m2 whenever a
+    wash was triggered. The old formula pinned DRAIN volume and solved
+    `needed = drain / LF_target`, which says salts are flushed by irrigating
+    less. Uptake is the conserved quantity, not drain.
+    """
+
+    def test_scenario_a_explicit_volume(self):
+        r = evaluate_leaching(4.0, 1.04, 2.0, 4.0)
+        self.assertTrue(r.wash_required)
+        self.assertAlmostEqual(r.lf_pct, 26.0, places=6)
+        self.assertAlmostEqual(r.delta_ec, 2.0, places=6)
+        self.assertAlmostEqual(r.target_lf_pct, 32.5, places=6)
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.385, delta=0.002)
+        self.assertAlmostEqual(r.target_irrigation_l_m2, 4.385, delta=0.002)
+        self.assertFalse(r.is_estimated_volume)
+        self.assertEqual(round(r.extra_irrigation_l_m2, 2), 0.39)
+
+    def test_scenario_a_reaches_the_target_lf(self):
+        """The recommended volume must actually land on the target LF."""
+        r = evaluate_leaching(4.0, 1.04, 2.0, 4.0)
+        new_drain = r.target_irrigation_l_m2 - r.uptake_l_m2
+        new_lf = 100.0 * new_drain / r.target_irrigation_l_m2
+        self.assertAlmostEqual(new_lf, r.target_lf_pct, places=6)
+
+    def test_old_drain_pinned_formula_would_return_zero(self):
+        """Guards the exact regression this replaced."""
+        v_irr, v_drain, lf_target = 4.0, 1.04, 0.30
+        old = max(0.0, (v_drain / lf_target) - v_irr)
+        self.assertAlmostEqual(old, 0.0, places=9)
+        new = evaluate_leaching(v_irr, v_drain, 2.0, 4.0).extra_irrigation_l_m2
+        self.assertGreater(new, 0.3)
+
+    def test_scenario_b_zero_volume_falls_back(self):
+        r = evaluate_leaching(0, 0.0, 2.0, 4.0,
+                              crop_id="tomato", stages=["fruit_set"])
+        self.assertTrue(r.is_estimated_volume)
+        self.assertAlmostEqual(r.used_irrigation_l_m2, 3.80, places=6)
+        self.assertTrue(r.wash_required)
+        self.assertGreater(r.extra_irrigation_l_m2, 0.0)
+
+    def test_none_volume_also_falls_back(self):
+        r = evaluate_leaching(None, 0.0, 2.0, 4.0,
+                              crop_id="cucumber", stages=["fruit_set"])
+        self.assertTrue(r.is_estimated_volume)
+        self.assertAlmostEqual(r.used_irrigation_l_m2, 4.0, places=6)
+
+    def test_explicit_volume_is_never_flagged_estimated(self):
+        r = evaluate_leaching(4.0, 1.04, 2.0, 4.0, crop_id="tomato")
+        self.assertFalse(r.is_estimated_volume)
+        self.assertAlmostEqual(r.used_irrigation_l_m2, 4.0, places=6)
+
+    def test_reference_volume_stacks_to_highest_demand(self):
+        self.assertAlmostEqual(reference_irrigation("tomato", ["start"]), 1.5)
+        self.assertAlmostEqual(reference_irrigation("tomato", ["fruit_set"]), 3.8)
+        self.assertAlmostEqual(
+            reference_irrigation("tomato", ["fruit_set", "high_water"]), 5.5)
+        self.assertAlmostEqual(reference_irrigation("tomato", []), 3.8)
+        self.assertAlmostEqual(reference_irrigation("unknown_crop", []), 3.5)
+
+    def test_high_water_reference_respects_the_manual(self):
+        """The manual defines high water supply as ABOVE 5 L/m2/day (p. 41)."""
+        for cid in crop_ids():
+            with self.subTest(crop=cid):
+                self.assertGreater(
+                    reference_irrigation(cid, ["high_water"]), 5.0)
+
+    def test_no_extra_when_lf_already_at_target(self):
+        r = evaluate_leaching(4.0, 1.4, 2.0, 4.0)   # LF 35% > target 32.5%
+        self.assertTrue(r.wash_required)
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.0, places=9)
+
+    def test_no_extra_when_wash_not_triggered(self):
+        r = evaluate_leaching(4.0, 1.04, 2.0, 2.5)   # dEC 0.5
+        self.assertFalse(r.wash_required)
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.0, places=9)
+
+    def test_extra_increases_as_current_lf_falls(self):
+        prev = -1.0
+        for drain in (1.4, 1.04, 0.6, 0.2):
+            v = evaluate_leaching(4.0, drain, 2.0, 4.0).extra_irrigation_l_m2
+            self.assertGreater(v, prev)
+            prev = v
+
+    def test_drain_above_irrigation_is_rejected(self):
+        with self.assertRaises(ValueError):
+            evaluate_leaching(2.0, 3.0, 2.0, 4.0)
+
+    def test_helper_is_pure_and_symmetric(self):
+        self.assertAlmostEqual(
+            extra_irrigation_for_target_lf(4.0, 0.26, 0.325), 0.385, delta=0.002)
+        self.assertEqual(extra_irrigation_for_target_lf(4.0, 0.40, 0.325), 0.0)
+        self.assertEqual(extra_irrigation_for_target_lf(0.0, 0.10, 0.325), 0.0)
+        with self.assertRaises(ValueError):
+            extra_irrigation_for_target_lf(4.0, 0.10, 1.0)
 
 
 class TestModule4Correction(unittest.TestCase):
