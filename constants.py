@@ -624,8 +624,13 @@ class SitePolicy:
     wash_trigger_delta_ec: float = 2.0
     wash_lf_min: float = 30.0
     wash_lf_max: float = 35.0
-    # Midpoint of the wash band; what the extra-irrigation calculation aims at.
+    # Midpoint of the wash band; the STANDARD-case extra-irrigation target.
     wash_lf_target: float = 32.5
+    # Tiered wash strategy boundaries (see engine.wash_target_lf).
+    wash_lf_moderate_min: float = 30.0    # at/above this, 32.5 is no longer a raise
+    wash_lf_anomaly_min: float = 40.0     # at/above this, more volume is the wrong answer
+    wash_lf_moderate_step: float = 10.0   # points added to LF in the MODERATE case
+    wash_lf_moderate_cap: float = 50.0
     # {crop_id: {stage: L/m2/day}} — overrides REFERENCE_IRRIGATION_L_M2_DAY
     reference_irrigation_overrides: dict[str, dict[str, float]] = field(
         default_factory=dict)

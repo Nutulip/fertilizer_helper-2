@@ -53,7 +53,8 @@ from engine import (
     ammonium_gates, evaluate_corrections, evaluate_leaching, evaluate_sodium,
     ion_balance_gates,
     iron_screening_gates,
-    leaching_gates, micronutrient_screening_gates, mmol_to_ppm, na_limit_for,
+    format_extra_irrigation, leaching_gates, micronutrient_screening_gates,
+    mmol_to_ppm, na_limit_for, wash_target_lf,
     residual_gates,
     plan_acid_dosing, ppb_to_umol, ppm_to_mmol, scale_to_ec, screen_antagonism,
     select_fe_chelate, sodium_gates, sort_gates, split_ab_tanks, steering_gates,
@@ -64,6 +65,14 @@ from engine import (
 # --------------------------------------------------------------------------
 # Bilingual display vocabulary for status enums
 # --------------------------------------------------------------------------
+
+WASH_CASE_TEXT: dict[str, str] = {
+    "NONE":     bi("No wash required", "无需冲洗"),
+    "STANDARD": bi("Standard wash cycle", "标准冲洗循环"),
+    "MODERATE": bi("Moderate-to-high LF wash cycle", "中高排液比冲洗循环"),
+    "ANOMALY":  bi("Extreme LF anomaly - investigate, do not add volume",
+                   "极端排液比异常 - 请排查，勿加水"),
+}
 
 STATUS_TEXT: dict[str, str] = {
     # M2 sodium
@@ -777,6 +786,7 @@ if FASTAPI_AVAILABLE:
         except ValueError as exc:
             raise _http_error(422, str(exc))
         gates = leaching_gates(r, pol)
+        _extra_en, _extra_zh = format_extra_irrigation(r.extra_irrigation_l_m2)
         data = {
             "leaching_fraction_pct": round(r.lf_pct, 2),
             "leaching_fraction_text": bi("Leaching Fraction (LF)", "排液比"),
@@ -801,9 +811,14 @@ if FASTAPI_AVAILABLE:
                 f"冲洗目标 {r.target_lf_pct:g}%"
                 f"（区间 {r.target_lf_min:g}-{r.target_lf_max:g}%）"),
             "extra_irrigation_l_m2": round(r.extra_irrigation_l_m2, 2),
-            "extra_irrigation_text": bi(
-                f"Add {r.extra_irrigation_l_m2:.2f} L/m2/day",
-                f"每日增加 {r.extra_irrigation_l_m2:.2f} L/m2"),
+            "extra_irrigation_display": _extra_en,
+            "extra_irrigation_text": bi(_extra_en, _extra_zh),
+            "wash_case": r.wash_case,
+            "wash_case_text": WASH_CASE_TEXT.get(r.wash_case, ""),
+            "is_wash_anomaly": r.is_wash_anomaly,
+            "wash_anomaly_text": bi(
+                "Adding volume will not close the EC gap",
+                "增加水量无法缩小电导差") if r.is_wash_anomaly else "",
             "target_irrigation_l_m2": round(r.target_irrigation_l_m2, 2),
             "target_irrigation_text": bi(
                 f"Raise irrigation to {r.target_irrigation_l_m2:.2f} L/m2/day",
@@ -1192,6 +1207,8 @@ if FASTAPI_AVAILABLE:
                 "delta_ec_ms_cm": round(lf.delta_ec, 3),
                 "band": lf.band, "band_text": STATUS_TEXT[lf.band],
                 "wash_required": lf.wash_required,
+                "wash_case": lf.wash_case,
+                "is_wash_anomaly": lf.is_wash_anomaly,
                 "target_lf_pct": lf.target_lf_pct,
                 "extra_irrigation_l_m2": round(lf.extra_irrigation_l_m2, 2),
                 "target_irrigation_l_m2": round(lf.target_irrigation_l_m2, 2),
@@ -1784,10 +1801,17 @@ class TestWashIrrigationIncrement(unittest.TestCase):
                 self.assertGreater(
                     reference_irrigation(cid, ["high_water"]), 5.0)
 
-    def test_no_extra_when_lf_already_at_target(self):
-        r = evaluate_leaching(4.0, 1.4, 2.0, 4.0)   # LF 35% > target 32.5%
+    def test_moderate_lf_gets_a_raised_target_not_a_zero(self):
+        """
+        LF 35% used to collapse to "add 0.00" because 32.5% was hardcoded.
+        It is now a MODERATE wash: target LF + 10 points, so the increment
+        stays positive and the advice stays coherent.
+        """
+        r = evaluate_leaching(4.0, 1.4, 2.0, 4.0)   # LF 35%
         self.assertTrue(r.wash_required)
-        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.0, places=9)
+        self.assertEqual(r.wash_case, "MODERATE")
+        self.assertAlmostEqual(r.target_lf_pct, 45.0, places=6)
+        self.assertGreater(r.extra_irrigation_l_m2, 0.0)
 
     def test_no_extra_when_wash_not_triggered(self):
         r = evaluate_leaching(4.0, 1.04, 2.0, 2.5)   # dEC 0.5
@@ -1795,11 +1819,13 @@ class TestWashIrrigationIncrement(unittest.TestCase):
         self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.0, places=9)
 
     def test_extra_increases_as_current_lf_falls(self):
+        """Monotonic within one target band; across bands the target moves."""
         prev = -1.0
-        for drain in (1.4, 1.04, 0.6, 0.2):
-            v = evaluate_leaching(4.0, drain, 2.0, 4.0).extra_irrigation_l_m2
-            self.assertGreater(v, prev)
-            prev = v
+        for drain in (1.19, 1.04, 0.6, 0.2):   # LF 29.75% -> 5%, all STANDARD
+            r = evaluate_leaching(4.0, drain, 2.0, 4.0)
+            self.assertEqual(r.wash_case, "STANDARD")
+            self.assertGreater(r.extra_irrigation_l_m2, prev)
+            prev = r.extra_irrigation_l_m2
 
     def test_drain_above_irrigation_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -1812,6 +1838,88 @@ class TestWashIrrigationIncrement(unittest.TestCase):
         self.assertEqual(extra_irrigation_for_target_lf(0.0, 0.10, 0.325), 0.0)
         with self.assertRaises(ValueError):
             extra_irrigation_for_target_lf(4.0, 0.10, 1.0)
+
+
+class TestTieredWashTarget(unittest.TestCase):
+    """
+    Regression: at LF >= 40% with a wash triggered, the fixed 32.5% target made
+    the solver ask for a REDUCTION, the clamp turned it into zero, and the
+    remedy read "Raise the leaching fraction to 30-35%: add 0.00 L/m2/day,
+    taking irrigation from 5.00 to 5.00" -- a contradiction and useless advice.
+    """
+
+    def test_case_a_standard(self):
+        self.assertEqual(wash_target_lf(10.0)[1], "STANDARD")
+        self.assertEqual(wash_target_lf(29.99)[1], "STANDARD")
+        self.assertAlmostEqual(wash_target_lf(26.0)[0], 32.5)
+        r = evaluate_leaching(4.0, 1.04, 2.0, 4.0)
+        self.assertEqual(r.wash_case, "STANDARD")
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.385, delta=0.002)
+
+    def test_case_b_moderate(self):
+        self.assertEqual(wash_target_lf(30.0)[1], "MODERATE")
+        self.assertAlmostEqual(wash_target_lf(30.0)[0], 40.0)
+        self.assertAlmostEqual(wash_target_lf(35.0)[0], 45.0)
+        # capped at 50%
+        self.assertAlmostEqual(wash_target_lf(39.9)[0], 49.9)
+        r = evaluate_leaching(5.0, 1.75, 2.0, 4.0)      # LF 35%
+        self.assertEqual(r.wash_case, "MODERATE")
+        self.assertAlmostEqual(r.target_lf_pct, 45.0, places=6)
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.909, delta=0.003)
+
+    def test_moderate_cap_never_exceeds_50(self):
+        pol = SitePolicy(wash_lf_anomaly_min=100.0)     # disable case C
+        for lf in (45.0, 60.0, 80.0):
+            self.assertLessEqual(wash_target_lf(lf, pol)[0], 50.0)
+
+    def test_case_c_anomaly(self):
+        self.assertEqual(wash_target_lf(40.0)[1], "ANOMALY")
+        r = evaluate_leaching(5.0, 2.2, 2.0, 4.0)       # LF 44%
+        self.assertTrue(r.wash_required)
+        self.assertTrue(r.is_wash_anomaly)
+        self.assertEqual(r.wash_case, "ANOMALY")
+        self.assertAlmostEqual(r.extra_irrigation_l_m2, 0.0, places=9)
+        self.assertAlmostEqual(r.target_irrigation_l_m2, r.used_irrigation_l_m2,
+                               places=9)
+
+    def test_anomaly_raises_its_own_gate_not_the_wash_gate(self):
+        r = evaluate_leaching(5.0, 2.2, 2.0, 4.0)
+        ids = [g.gid for g in leaching_gates(r)]
+        self.assertIn("G-WASH-ANOMALY", ids)
+        self.assertNotIn("G-WASH-TRIGGER", ids)
+
+    def test_anomaly_remedy_never_says_add_volume(self):
+        r = evaluate_leaching(5.0, 2.2, 2.0, 4.0)
+        g = next(g for g in leaching_gates(r) if g.gid == "G-WASH-ANOMALY")
+        self.assertIn("DO NOT", g.remedy_en)
+        self.assertIn("channel", g.remedy_en.lower())
+        self.assertIn("pulses", g.remedy_en.lower())
+        self.assertIn("请勿", g.remedy_zh)
+        self.assertNotIn("Raise leaching fraction", g.remedy_en)
+
+    def test_no_contradictory_zero_add_text_anywhere(self):
+        """The exact shape of the reported bug must not reappear."""
+        for vi, vd in ((5.0, 2.2), (5.0, 2.5), (4.0, 1.8), (10.0, 4.5)):
+            r = evaluate_leaching(vi, vd, 2.0, 4.0)
+            for g in leaching_gates(r):
+                with self.subTest(vi=vi, vd=vd, gate=g.gid):
+                    if "Raise leaching fraction" in g.remedy_en:
+                        self.assertGreater(r.extra_irrigation_l_m2, 0.0)
+                        self.assertNotIn("add +0.00", g.remedy_en)
+
+    def test_display_formatting(self):
+        en, zh = format_extra_irrigation(0.385)
+        self.assertEqual(en, "+0.39 L/m2/day")
+        self.assertIn("+0.39", zh)
+        en0, zh0 = format_extra_irrigation(0.0)
+        self.assertIn("no additional volume recommended", en0)
+        self.assertIn("不建议增加灌溉量", zh0)
+
+    def test_standard_case_unchanged_for_low_lf(self):
+        """The original acceptance scenario must still hold exactly."""
+        r = evaluate_leaching(4.0, 1.04, 2.0, 4.0)
+        self.assertEqual(round(r.extra_irrigation_l_m2, 2), 0.39)
+        self.assertAlmostEqual(r.target_irrigation_l_m2, 4.385, delta=0.002)
 
 
 class TestModule4Correction(unittest.TestCase):

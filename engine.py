@@ -612,6 +612,9 @@ class LeachingResult:
     drain_l_m2: float
     uptake_l_m2: float
     is_estimated_volume: bool
+    # "STANDARD" | "MODERATE" | "ANOMALY" | "NONE"
+    wash_case: str = "NONE"
+    is_wash_anomaly: bool = False
 
 
 LF_BANDS = [
@@ -621,6 +624,36 @@ LF_BANDS = [
     (30.0, 40.0, "WASH", "Wash / flush", "冲洗区"),
     (40.0, 1e9, "EXCESS", "Excess", "过量"),
 ]
+
+
+def wash_target_lf(lf_current_pct: float,
+                   policy: SitePolicy = DEFAULT_POLICY) -> tuple[float, str]:
+    """
+    Choose the wash target leaching fraction for the CURRENT leaching fraction.
+
+    A fixed 32.5% target is only correct while the crop is under-leaching. Once
+    the measured LF is already at or above that figure, "raise LF to 32.5%"
+    describes a reduction, the solver returns a negative volume, the clamp
+    turns it into zero, and the grower is told to "add 0.00 L/m2/day" — advice
+    that is both contradictory and useless.
+
+      STANDARD  LF < 30%        -> 32.5% (midpoint of the 30-35% band)
+      MODERATE  30% <= LF < 40% -> LF + 10 points, capped at 50%
+      ANOMALY   LF >= 40%       -> no volume target at all
+
+    The ANOMALY case is a genuine agronomic finding, not a clamp. An EC gap
+    that persists while more than 40% of applied water already drains away is
+    not a leaching deficit: the water is bypassing the root zone (substrate
+    channeling / preferential flow), the dripper or stock EC is over-calibrated,
+    or salt has accumulated beyond what volume alone can shift. Adding more
+    water would waste water and fertiliser without closing the gap.
+    """
+    if lf_current_pct < policy.wash_lf_moderate_min:
+        return policy.wash_lf_target, "STANDARD"
+    if lf_current_pct < policy.wash_lf_anomaly_min:
+        return (min(policy.wash_lf_moderate_cap,
+                    lf_current_pct + policy.wash_lf_moderate_step), "MODERATE")
+    return lf_current_pct, "ANOMALY"
 
 
 def extra_irrigation_for_target_lf(v_irrigation_l_m2: float,
@@ -691,12 +724,15 @@ def evaluate_leaching(v_irrigation_l_m2: float | None,
     wash = delta_ec >= policy.wash_trigger_delta_ec - 1e-9
 
     target_lf_pct = policy.wash_lf_target
+    wash_case = "NONE"
     extra = 0.0
     target_irrigation = v_irrigation_l_m2
     if wash:
-        extra = extra_irrigation_for_target_lf(
-            v_irrigation_l_m2, lf / 100.0, target_lf_pct / 100.0)
-        target_irrigation = v_irrigation_l_m2 + extra
+        target_lf_pct, wash_case = wash_target_lf(lf, policy)
+        if wash_case != "ANOMALY":
+            extra = extra_irrigation_for_target_lf(
+                v_irrigation_l_m2, lf / 100.0, target_lf_pct / 100.0)
+            target_irrigation = v_irrigation_l_m2 + extra
 
     return LeachingResult(
         lf_pct=lf, delta_ec=delta_ec, band=band, wash_required=wash,
@@ -708,12 +744,59 @@ def evaluate_leaching(v_irrigation_l_m2: float | None,
         drain_l_m2=v_drain_l_m2,
         uptake_l_m2=uptake,
         is_estimated_volume=is_estimated,
+        wash_case=wash_case,
+        is_wash_anomaly=(wash_case == "ANOMALY"),
     )
+
+
+def format_extra_irrigation(delta_v: float) -> tuple[str, str]:
+    """
+    Bilingual rendering of the volume increment.
+
+    A non-positive increment is never shown as a bare "+0.00": it means no
+    additional volume is recommended, which is a different statement from
+    "add nothing and carry on".
+    """
+    if delta_v > EPS:
+        return (f"+{delta_v:.2f} L/m2/day",
+                f"每日 +{delta_v:.2f} L/m2")
+    return ("+0.00 L/m2/day (no additional volume recommended)",
+            "+0.00 L/m2/天（不建议增加灌溉量）")
 
 
 def leaching_gates(r: LeachingResult, policy: SitePolicy = DEFAULT_POLICY) -> list[Gate]:
     gates: list[Gate] = []
-    if r.wash_required:
+
+    if r.wash_required and r.is_wash_anomaly:
+        gates.append(Gate(
+            "G-WASH-ANOMALY", "CRITICAL",
+            "Critical agronomic anomaly - do not add irrigation volume",
+            "严重农艺异常 - 请勿增加灌溉量",
+            f"Leaching fraction is already high ({r.lf_pct:.1f}%), yet the "
+            f"drain-dripper EC gap is {r.delta_ec:.2f} mS/cm. More than "
+            f"{r.lf_pct:.0f}% of applied water already leaves the substrate, so "
+            f"the salt load is not a leaching deficit and additional volume "
+            f"will not close the gap - it will only waste water and fertiliser.",
+            f"排液比已偏高（{r.lf_pct:.1f}%），但排液与滴灌电导差仍达 "
+            f"{r.delta_ec:.2f} mS/cm。已有超过 {r.lf_pct:.0f}% 的灌溉水排出基质，"
+            f"说明盐分问题并非淋洗不足，增加水量无法缩小电导差，"
+            f"只会浪费水与肥料。",
+            {"lf_pct": round(r.lf_pct, 1), "delta_ec": round(r.delta_ec, 2),
+             "extra_irrigation_l_m2": 0.0},
+            "DO NOT simply increase irrigation volume. Check for: "
+            "1) substrate channeling / preferential flow, water bypassing the "
+            "root zone; 2) dripper or stock tank EC over-calibration; "
+            "3) severe root-zone salt accumulation. "
+            "Switch to shorter, more frequent irrigation pulses.",
+            "请勿单纯增加灌溉量。请依次排查："
+            "1) 基质偏流／优势流，水分绕过根区；"
+            "2) 滴灌或母液电导率标定过高；"
+            "3) 根际盐分严重累积。"
+            "并改为短时、高频的脉冲灌溉。",
+            "SRC:PRACTICE"))
+
+    if r.wash_required and not r.is_wash_anomaly:
+        extra_en, extra_zh = format_extra_irrigation(r.extra_irrigation_l_m2)
         gates.append(Gate(
             "G-WASH-TRIGGER", "CRITICAL",
             "Dynamic wash cycle triggered", "触发动态冲洗循环",
@@ -725,19 +808,16 @@ def leaching_gates(r: LeachingResult, policy: SitePolicy = DEFAULT_POLICY) -> li
             {"delta_ec": round(r.delta_ec, 2), "lf_pct": round(r.lf_pct, 1),
              "extra_irrigation_l_m2": round(r.extra_irrigation_l_m2, 2),
              "target_irrigation_l_m2": round(r.target_irrigation_l_m2, 2)},
-            f"Raise the leaching fraction to {r.target_lf_min:g}-{r.target_lf_max:g}% "
-            f"(target {r.target_lf_pct:g}%): add "
-            f"{r.extra_irrigation_l_m2:.2f} L/m2/day, taking irrigation from "
-            f"{r.used_irrigation_l_m2:.2f} to {r.target_irrigation_l_m2:.2f} "
-            f"L/m2/day, until the EC gap closes."
+            f"Raise leaching fraction from {r.lf_pct:.1f}% to "
+            f"{r.target_lf_pct:.1f}%: add {extra_en}, increasing irrigation "
+            f"from {r.used_irrigation_l_m2:.2f} to "
+            f"{r.target_irrigation_l_m2:.2f} L/m2/day until the EC gap closes."
             + (" Irrigation volume was not supplied, so a crop-stage reference "
-               "volume was used — verify against your own metering."
+               "volume was used - verify against your own metering."
                if r.is_estimated_volume else ""),
-            f"将排液比提高至 {r.target_lf_min:g}-{r.target_lf_max:g}%"
-            f"（目标 {r.target_lf_pct:g}%）：每日增加 "
-            f"{r.extra_irrigation_l_m2:.2f} L/m2，灌溉量由 "
-            f"{r.used_irrigation_l_m2:.2f} 提高至 {r.target_irrigation_l_m2:.2f} "
-            f"L/m2/天，直至电导差回落。"
+            f"将排液比由 {r.lf_pct:.1f}% 提高至 {r.target_lf_pct:.1f}%："
+            f"增加 {extra_zh}，灌溉量由 {r.used_irrigation_l_m2:.2f} 提高至 "
+            f"{r.target_irrigation_l_m2:.2f} L/m2/天，直至电导差回落。"
             + ("（未提供灌溉量，已采用作物阶段参考值估算，请与实际计量核对。）"
                if r.is_estimated_volume else ""),
             "SRC:PRACTICE"))

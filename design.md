@@ -852,8 +852,24 @@ V_target_irr = V_uptake / (1 − LF_target)
 ΔV_extra     = V_irrigation × ( (1 − LF_current) / (1 − LF_target) − 1 )
 ```
 
-`LF_target` is the midpoint of the wash band, 32.5% (`policy.wash_lf_target`).
-`ΔV_extra` is 0 when `LF_current ≥ LF_target`.
+`LF_target` is **not** a constant. A fixed 32.5% is only a *raise* while the
+crop is under-leaching; once measured LF reaches it, the solver asks for a
+reduction, the clamp returns 0, and the remedy reads "raise LF … add 0.00
+L/m²/day" — contradictory and useless. The target is therefore tiered:
+
+| Case | Condition | `LF_target` | `ΔV_extra` |
+|---|---|---|---|
+| **STANDARD** | `LF < 30%` | 32.5% (band midpoint) | > 0 |
+| **MODERATE** | `30% ≤ LF < 40%` | `min(50%, LF + 10)` | > 0 |
+| **ANOMALY** | `LF ≥ 40%` | none — no volume target | **0, by diagnosis** |
+
+The ANOMALY case is an agronomic finding, not a clamp. An EC gap that persists
+while over 40% of applied water already drains is not a leaching deficit: water
+is bypassing the root zone (substrate channeling / preferential flow), the
+dripper or stock EC is over-calibrated, or salt has accumulated beyond what
+volume can shift. It raises `G-WASH-ANOMALY` (CRITICAL) **instead of**
+`G-WASH-TRIGGER`, and its remedy directs the grower to shorter, more frequent
+pulses rather than more water.
 
 > **Do not pin drain volume.** Solving `V_needed = V_drain / LF_target` holds
 > drain constant and inverts the agronomy. At `V_irr = 4.0`, `V_drain = 1.04`
