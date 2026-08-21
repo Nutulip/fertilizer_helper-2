@@ -1,0 +1,795 @@
+{
+  "meta": {
+    "title": "WUR Master Agronomic Database",
+    "title_bilingual": "【WUR 主数据库 (WUR Master Database)】",
+    "source": "Van der Lugt, G. et al. (2020) Nutrient Solutions for Greenhouse Crops, Version 4, ISBN 9789464021844. Eurofins Agro / Nouryon / SQM / Yara.",
+    "generated_from": "constants.py / engine.py (live import)",
+    "engine_version": "1.0.0"
+  },
+  "atomic_weights_g_per_mol": {
+    "K": 39.1,
+    "Ca": 40.08,
+    "Mg": 24.31,
+    "N": 14.0,
+    "P": 30.97,
+    "S": 32.06,
+    "N_NO3": 14.0,
+    "N_NH4": 14.0,
+    "NO3": 14.0,
+    "NH4": 14.0,
+    "Na": 22.99,
+    "Cl": 35.45,
+    "HCO3": 61.02,
+    "Fe": 55.85,
+    "Mn": 54.94,
+    "Zn": 65.38,
+    "B": 10.81,
+    "Cu": 63.55,
+    "Mo": 95.94
+  },
+  "atomic_weights_note": "WUR Table 7, p.39. g/mol == mg/mmol == ug/umol.",
+  "ion_charges": {
+    "NH4": 1,
+    "K": 1,
+    "Na": 1,
+    "Ca": 2,
+    "Mg": 2,
+    "H": 1,
+    "NO3": 1,
+    "Cl": 1,
+    "S": 2,
+    "HCO3": 1,
+    "P": 1
+  },
+  "cations": [
+    "NH4",
+    "K",
+    "Na",
+    "Ca",
+    "Mg",
+    "H"
+  ],
+  "anions": [
+    "NO3",
+    "Cl",
+    "S",
+    "HCO3",
+    "P"
+  ],
+  "ec_model": {
+    "formula": "EC (mS/cm) = (Eq_cations + Eq_anions) / 20",
+    "divisor": 20.0,
+    "ion_balance_tolerance_fraction": 0.1,
+    "reference_ec_offset": 0.3,
+    "na_ec_factor": 0.1,
+    "source": "Formulas 1-4, p.21-22"
+  },
+  "oxide_to_elemental": {
+    "NO3_to_N": 0.226,
+    "NH4_to_N": 0.776,
+    "P2O5_to_P": 0.436,
+    "K2O_to_K": 0.83,
+    "CaO_to_Ca": 0.715,
+    "MgO_to_Mg": 0.603,
+    "SO4_to_S": 0.334,
+    "SO3_to_S": 0.4
+  },
+  "elemental_to_oxide": {
+    "N_to_NO3": 4.426,
+    "N_to_NH4": 1.288,
+    "P_to_P2O5": 2.292,
+    "K_to_K2O": 1.205,
+    "Ca_to_CaO": 1.399,
+    "Mg_to_MgO": 1.658,
+    "S_to_SO4": 2.996,
+    "S_to_SO3": 2.497
+  },
+  "water_quality_levels": [
+    {
+      "level": 1,
+      "ec_max": 0.5,
+      "ion_max": 1.5,
+      "na_ppm": "< 34",
+      "cl_ppm": "< 53",
+      "suitability_en": "Suitable for all crops",
+      "suitability_zh": "适用于所有作物"
+    },
+    {
+      "level": 2,
+      "ec_max": 1.0,
+      "ion_max": 2.5,
+      "na_ppm": "34 - 57",
+      "cl_ppm": "53 - 87",
+      "suitability_en": "Not suitable when recirculation is necessary",
+      "suitability_zh": "需要循环回用时不适用"
+    },
+    {
+      "level": 3,
+      "ec_max": 1.5,
+      "ion_max": 4.0,
+      "na_ppm": "57 - 92",
+      "cl_ppm": "87 - 142",
+      "suitability_en": "Not to be used for salt-sensitive crops",
+      "suitability_zh": "不可用于盐敏感作物"
+    }
+  ],
+  "sodium_ceilings_mmol_l": {
+    "tomato": 8.0,
+    "sweet_pepper": 6.0,
+    "eggplant": 6.0,
+    "cucumber": 6.0,
+    "melon": 6.0,
+    "rose": 4.0,
+    "gerbera": 4.0,
+    "carnation": 4.0,
+    "orchid": 1.0
+  },
+  "sodium_ceiling_note": "Table 2, p.12, stated on the root-zone SOLUTION basis. The crop x substrate matrix overrides this: organic and soil targets are read from diluted extracts and their ceilings differ (tomato 8 on inert, 2 on organic).",
+  "chloride_offset_mmol_l": 0.2,
+  "fe_chelate_ph_bands": {
+    "fe_edta": [
+      1.5,
+      6.5
+    ],
+    "fe_dtpa": [
+      1.5,
+      7.5
+    ],
+    "fe_eddha": [
+      3.0,
+      10.0
+    ],
+    "fe_hbed": [
+      3.0,
+      12.0
+    ]
+  },
+  "fe_chelate_switch_ph": 6.5,
+  "prophylactic_eddha_fraction": {
+    "inert_substrate": 0.25,
+    "nft": 0.1
+  },
+  "average_plant_need_umol_l": {
+    "rose": {
+      "Fe": 25,
+      "Mn": 5,
+      "Zn": 3,
+      "B": 20,
+      "Cu": 0.8,
+      "Mo": 0.5
+    },
+    "potted_plant": {
+      "Fe": 15,
+      "Mn": 5,
+      "Zn": 4,
+      "B": 10,
+      "Cu": 0.5,
+      "Mo": 0.5
+    },
+    "tomato": {
+      "Fe": 15,
+      "Mn": 10,
+      "Zn": 5,
+      "B": 30,
+      "Cu": 0.8,
+      "Mo": 0.5
+    }
+  },
+  "substrate_types": [
+    "INERT_SUBSTRATE",
+    "ORGANIC_MATERIAL",
+    "SOIL"
+  ],
+  "extract_methods": {
+    "INERT_SUBSTRATE": "direct",
+    "ORGANIC_MATERIAL": "1:1.5_volume",
+    "SOIL": "1:2_volume"
+  },
+  "crop_categories": [
+    "fruiting_vegetables",
+    "soft_fruits",
+    "leafy_vegetables",
+    "cut_flowers",
+    "potted_plants"
+  ],
+  "stock_tank_mass_formula": {
+    "macronutrient_kg": "mmol/L * mass_per_mol_ion(g) * CF/1000 * V/1000",
+    "at_100x_1000L": "kg = mmol/L * mass_per_mol_ion * 0.1",
+    "micronutrient_g": "umol/L * atomic_weight / product_fraction * 0.1",
+    "critical_note": "mass_per_mol_ion is grams of product per mole of the DRIVING ion, not per mole of fertiliser. Calcium nitrate is 1080 g/mol but carries 5 Ca, so the divisor is 216. Using 1080 over-doses by 5x.",
+    "source": "Ch.8, p.28"
+  },
+  "fertiliser_catalogue": [
+    {
+      "id": "hno3_38",
+      "name_en": "Nitric acid 38%",
+      "name_zh": "硝酸 38%",
+      "formula": "HNO3",
+      "formula_mass_g_per_mol": 167.0,
+      "driving_ion": "H",
+      "mass_per_mol_driving_ion_g": 167.0,
+      "ion_yields_mol_per_mol": {
+        "H": 1,
+        "NO3": 1
+      },
+      "tank": "EITHER",
+      "phase": "liquid",
+      "density_kg_per_l": 1.24,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null,
+      "molarity_mol_h_per_l": 7.4251
+    },
+    {
+      "id": "hno3_60",
+      "name_en": "Nitric acid 60%",
+      "name_zh": "硝酸 60%",
+      "formula": "HNO3",
+      "formula_mass_g_per_mol": 105.0,
+      "driving_ion": "H",
+      "mass_per_mol_driving_ion_g": 105.0,
+      "ion_yields_mol_per_mol": {
+        "H": 1,
+        "NO3": 1
+      },
+      "tank": "EITHER",
+      "phase": "liquid",
+      "density_kg_per_l": 1.37,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null,
+      "molarity_mol_h_per_l": 13.0476
+    },
+    {
+      "id": "h3po4_59",
+      "name_en": "Phosphoric acid 59%",
+      "name_zh": "磷酸 59%",
+      "formula": "H3PO4",
+      "formula_mass_g_per_mol": 167.0,
+      "driving_ion": "H",
+      "mass_per_mol_driving_ion_g": 167.0,
+      "ion_yields_mol_per_mol": {
+        "H": 1,
+        "P": 1
+      },
+      "tank": "B",
+      "phase": "liquid",
+      "density_kg_per_l": 1.42,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null,
+      "molarity_mol_h_per_l": 8.503
+    },
+    {
+      "id": "can_solid",
+      "name_en": "Calcium nitrate solid",
+      "name_zh": "固体硝酸钙",
+      "formula": "5[Ca(NO3)2.2H2O].NH4NO3",
+      "formula_mass_g_per_mol": 1080.0,
+      "driving_ion": "Ca",
+      "mass_per_mol_driving_ion_g": 216.0,
+      "ion_yields_mol_per_mol": {
+        "Ca": 5,
+        "NH4": 1,
+        "NO3": 11
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "cacl2_s",
+      "name_en": "Calcium chloride anhydrous",
+      "name_zh": "无水氯化钙",
+      "formula": "CaCl2",
+      "formula_mass_g_per_mol": 111.0,
+      "driving_ion": "Cl",
+      "mass_per_mol_driving_ion_g": 55.5,
+      "ion_yields_mol_per_mol": {
+        "Ca": 1,
+        "Cl": 2
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "map",
+      "name_en": "Monoammonium phosphate",
+      "name_zh": "磷酸一铵",
+      "formula": "NH4H2PO4",
+      "formula_mass_g_per_mol": 115.0,
+      "driving_ion": "NH4",
+      "mass_per_mol_driving_ion_g": 115.0,
+      "ion_yields_mol_per_mol": {
+        "NH4": 1,
+        "P": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "nh4no3_liq",
+      "name_en": "Ammonium nitrate liquid",
+      "name_zh": "液体硝酸铵",
+      "formula": "NH4NO3",
+      "formula_mass_g_per_mol": 156.0,
+      "driving_ion": "NH4",
+      "mass_per_mol_driving_ion_g": 156.0,
+      "ion_yields_mol_per_mol": {
+        "NH4": 1,
+        "NO3": 1
+      },
+      "tank": "EITHER",
+      "phase": "liquid",
+      "density_kg_per_l": 1.25,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "mkp",
+      "name_en": "Monopotassium phosphate",
+      "name_zh": "磷酸二氢钾",
+      "formula": "KH2PO4",
+      "formula_mass_g_per_mol": 136.1,
+      "driving_ion": "P",
+      "mass_per_mol_driving_ion_g": 136.1,
+      "ion_yields_mol_per_mol": {
+        "K": 1,
+        "P": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "mgso4",
+      "name_en": "Magnesium sulphate",
+      "name_zh": "七水硫酸镁",
+      "formula": "MgSO4.7H2O",
+      "formula_mass_g_per_mol": 246.4,
+      "driving_ion": "Mg",
+      "mass_per_mol_driving_ion_g": 246.4,
+      "ion_yields_mol_per_mol": {
+        "Mg": 1,
+        "S": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "mgno3_s",
+      "name_en": "Magnesium nitrate",
+      "name_zh": "六水硝酸镁",
+      "formula": "Mg(NO3)2.6H2O",
+      "formula_mass_g_per_mol": 256.0,
+      "driving_ion": "Mg",
+      "mass_per_mol_driving_ion_g": 256.0,
+      "ion_yields_mol_per_mol": {
+        "Mg": 1,
+        "NO3": 2
+      },
+      "tank": "EITHER",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "k2so4",
+      "name_en": "Potassium sulphate",
+      "name_zh": "硫酸钾",
+      "formula": "K2SO4",
+      "formula_mass_g_per_mol": 174.3,
+      "driving_ion": "S",
+      "mass_per_mol_driving_ion_g": 174.3,
+      "ion_yields_mol_per_mol": {
+        "K": 2,
+        "S": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "kno3",
+      "name_en": "Potassium nitrate",
+      "name_zh": "硝酸钾",
+      "formula": "KNO3",
+      "formula_mass_g_per_mol": 101.1,
+      "driving_ion": "K",
+      "mass_per_mol_driving_ion_g": 101.1,
+      "ion_yields_mol_per_mol": {
+        "K": 1,
+        "NO3": 1
+      },
+      "tank": "EITHER",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "kcl",
+      "name_en": "Potassium chloride",
+      "name_zh": "氯化钾",
+      "formula": "KCl",
+      "formula_mass_g_per_mol": 74.6,
+      "driving_ion": "Cl",
+      "mass_per_mol_driving_ion_g": 74.6,
+      "ion_yields_mol_per_mol": {
+        "K": 1,
+        "Cl": 1
+      },
+      "tank": "EITHER",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": null
+    },
+    {
+      "id": "fe_edta",
+      "name_en": "Iron chelate Fe-EDTA 13%",
+      "name_zh": "铁螯合物 Fe-EDTA 13%",
+      "formula": "Fe-EDTA",
+      "formula_mass_g_per_mol": 429.0,
+      "driving_ion": "Fe",
+      "mass_per_mol_driving_ion_g": 429.0,
+      "ion_yields_mol_per_mol": {
+        "Fe": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "EDTA",
+      "ph_stability": [
+        1.5,
+        6.5
+      ],
+      "micronutrient_fraction": 0.13
+    },
+    {
+      "id": "fe_dtpa",
+      "name_en": "Iron chelate Fe-DTPA 6%",
+      "name_zh": "铁螯合物 Fe-DTPA 6%",
+      "formula": "Fe-DTPA",
+      "formula_mass_g_per_mol": 931.0,
+      "driving_ion": "Fe",
+      "mass_per_mol_driving_ion_g": 931.0,
+      "ion_yields_mol_per_mol": {
+        "Fe": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "DTPA",
+      "ph_stability": [
+        1.5,
+        7.5
+      ],
+      "micronutrient_fraction": 0.06
+    },
+    {
+      "id": "fe_eddha",
+      "name_en": "Iron chelate Fe-EDDHA 6%",
+      "name_zh": "铁螯合物 Fe-EDDHA 6%",
+      "formula": "Fe-EDDHA",
+      "formula_mass_g_per_mol": 931.0,
+      "driving_ion": "Fe",
+      "mass_per_mol_driving_ion_g": 931.0,
+      "ion_yields_mol_per_mol": {
+        "Fe": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "EDDHA",
+      "ph_stability": [
+        3.0,
+        10.0
+      ],
+      "micronutrient_fraction": 0.06
+    },
+    {
+      "id": "fe_hbed",
+      "name_en": "Iron chelate Fe-HBED 6%",
+      "name_zh": "铁螯合物 Fe-HBED 6%",
+      "formula": "Fe-HBED",
+      "formula_mass_g_per_mol": 931.0,
+      "driving_ion": "Fe",
+      "mass_per_mol_driving_ion_g": 931.0,
+      "ion_yields_mol_per_mol": {
+        "Fe": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "HBED",
+      "ph_stability": [
+        3.0,
+        12.0
+      ],
+      "micronutrient_fraction": 0.06
+    },
+    {
+      "id": "mn_edta",
+      "name_en": "Manganese EDTA 13%",
+      "name_zh": "锰螯合物 Mn-EDTA 13%",
+      "formula": "Mn-EDTA",
+      "formula_mass_g_per_mol": 423.0,
+      "driving_ion": "Mn",
+      "mass_per_mol_driving_ion_g": 423.0,
+      "ion_yields_mol_per_mol": {
+        "Mn": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "EDTA",
+      "ph_stability": [
+        3.0,
+        10.0
+      ],
+      "micronutrient_fraction": 0.13
+    },
+    {
+      "id": "zn_edta",
+      "name_en": "Zinc EDTA 15%",
+      "name_zh": "锌螯合物 Zn-EDTA 15%",
+      "formula": "Zn-EDTA",
+      "formula_mass_g_per_mol": 436.0,
+      "driving_ion": "Zn",
+      "mass_per_mol_driving_ion_g": 436.0,
+      "ion_yields_mol_per_mol": {
+        "Zn": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "EDTA",
+      "ph_stability": [
+        2.0,
+        10.0
+      ],
+      "micronutrient_fraction": 0.15
+    },
+    {
+      "id": "cu_edta",
+      "name_en": "Copper EDTA 15%",
+      "name_zh": "铜螯合物 Cu-EDTA 15%",
+      "formula": "Cu-EDTA",
+      "formula_mass_g_per_mol": 424.0,
+      "driving_ion": "Cu",
+      "mass_per_mol_driving_ion_g": 424.0,
+      "ion_yields_mol_per_mol": {
+        "Cu": 1
+      },
+      "tank": "A",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": "EDTA",
+      "ph_stability": [
+        1.5,
+        10.0
+      ],
+      "micronutrient_fraction": 0.15
+    },
+    {
+      "id": "borax",
+      "name_en": "Borax 11.3% B",
+      "name_zh": "硼砂 11.3% B",
+      "formula": "Na2B4O7.10H2O",
+      "formula_mass_g_per_mol": 381.0,
+      "driving_ion": "B",
+      "mass_per_mol_driving_ion_g": 95.25,
+      "ion_yields_mol_per_mol": {
+        "B": 4
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": true,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.113
+    },
+    {
+      "id": "h3bo3",
+      "name_en": "Boric acid 17.5% B",
+      "name_zh": "硼酸 17.5% B",
+      "formula": "H3BO3",
+      "formula_mass_g_per_mol": 62.0,
+      "driving_ion": "B",
+      "mass_per_mol_driving_ion_g": 62.0,
+      "ion_yields_mol_per_mol": {
+        "B": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.175
+    },
+    {
+      "id": "na_moly",
+      "name_en": "Sodium molybdate 39.6%",
+      "name_zh": "钼酸钠 39.6%",
+      "formula": "Na2MoO4.2H2O",
+      "formula_mass_g_per_mol": 241.9,
+      "driving_ion": "Mo",
+      "mass_per_mol_driving_ion_g": 241.9,
+      "ion_yields_mol_per_mol": {
+        "Mo": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": true,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.396
+    },
+    {
+      "id": "mnso4",
+      "name_en": "Manganese sulphate 32.5%",
+      "name_zh": "硫酸锰 32.5%",
+      "formula": "MnSO4.H2O",
+      "formula_mass_g_per_mol": 169.0,
+      "driving_ion": "Mn",
+      "mass_per_mol_driving_ion_g": 169.0,
+      "ion_yields_mol_per_mol": {
+        "Mn": 1,
+        "S": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.325
+    },
+    {
+      "id": "znso4",
+      "name_en": "Zinc sulphate 22.7%",
+      "name_zh": "硫酸锌 22.7%",
+      "formula": "ZnSO4.7H2O",
+      "formula_mass_g_per_mol": 287.5,
+      "driving_ion": "Zn",
+      "mass_per_mol_driving_ion_g": 287.5,
+      "ion_yields_mol_per_mol": {
+        "Zn": 1,
+        "S": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.227
+    },
+    {
+      "id": "cuso4",
+      "name_en": "Copper sulphate 25.5%",
+      "name_zh": "硫酸铜 25.5%",
+      "formula": "CuSO4.5H2O",
+      "formula_mass_g_per_mol": 249.7,
+      "driving_ion": "Cu",
+      "mass_per_mol_driving_ion_g": 249.7,
+      "ion_yields_mol_per_mol": {
+        "Cu": 1,
+        "S": 1
+      },
+      "tank": "B",
+      "phase": "solid",
+      "density_kg_per_l": null,
+      "sodium_bearing": false,
+      "chelate_agent": null,
+      "ph_stability": null,
+      "micronutrient_fraction": 0.255
+    }
+  ],
+  "spec_divergences": [
+    {
+      "id": "DIV-1",
+      "topic": "Acid concentrations",
+      "brief_states": "65% HNO3, 85% H3PO4",
+      "codebase_implements": "38% HNO3 (d=1.24), 60% HNO3 (d=1.37), 59% H3PO4 (d=1.42)",
+      "basis": "WUR Table 5, p.26 lists exactly these three acid grades. Neither 65% HNO3 nor 85% H3PO4 appears in the manual.",
+      "resolution": "Exported the catalogue grades. Molarity is computed from density and mass-per-mole-of-H+, so a site using a different grade can add it to the catalogue and every downstream figure follows.",
+      "severity": "material - dosing volumes differ by roughly 1.7x between 38% and 65% nitric acid"
+    },
+    {
+      "id": "DIV-2",
+      "topic": "Safety gate identifiers",
+      "brief_states": "G-ACID-POISON (pH<5.2), G-SALINITY-MELTDOWN (EC>4.5), G-K-CA-ANTAGONISM (dK > +2.0 mmol/L), G-NA-CEILING",
+      "codebase_implements": "G-MELTDOWN covers BOTH pH<5.2 and EC>4.5 as one blocking gate; sodium is G-NA-APPROACH / G-NA-EXCEED / G-NA-UNREACHABLE; 36 gates total",
+      "basis": "Gate identifiers are emitted by engine.py and consumed by the frontend; renaming them in an export would describe a system that does not exist.",
+      "resolution": "Exported the real gate registry plus an explicit `brief_name_mapping` for each requested name.",
+      "severity": "naming only - thresholds (pH 5.2, EC 4.5) match exactly"
+    },
+    {
+      "id": "DIV-3",
+      "topic": "K:Ca antagonism rule",
+      "brief_states": "G-K-CA-ANTAGONISM fires at dK > +2.0 mmol/L",
+      "codebase_implements": "No such rule. Antagonism screening is pattern-based: K_SUPPRESSES_CA_MG fires when K exceeds 40% of cation equivalents AND Ca or Mg is below target.",
+      "basis": "The manual gives no absolute delta-K threshold; it reports the K/Ca ratio and the cation balance chart (p.29-30).",
+      "resolution": "Exported the implemented pattern rules. The dK>2.0 rule is listed as NOT IMPLEMENTED rather than fabricated.",
+      "severity": "material - exporting an unimplemented threshold would misrepresent the system to the agronomy reviewers"
+    },
+    {
+      "id": "DIV-4",
+      "topic": "Charge balance cation formula",
+      "brief_states": "Cations = K + 2Ca + 2Mg + NH4 + Na",
+      "codebase_implements": "Cations = NH4 + K + Na + 2Ca + 2Mg + H+",
+      "basis": "H+ from acid dosing participates as a cation. Table 3 step 7 (p.23) only balances when it is included: EqCat 21.2 vs EqAn 21.25 with H+ = 0.5 mmol/L.",
+      "resolution": "Exported with the H+ term and a note.",
+      "severity": "material when acid is dosed; identical otherwise"
+    },
+    {
+      "id": "DIV-5",
+      "topic": "Module count",
+      "brief_states": "5 core modules",
+      "codebase_implements": "8 modules (M1-M8)",
+      "basis": "Design document section 6.",
+      "resolution": "Exports are grouped into the brief's 5 buckets; the mapping is given in the master spec.",
+      "severity": "presentational"
+    },
+    {
+      "id": "DIV-6",
+      "topic": "Wash target leaching fraction",
+      "brief_states": "Extra irrigation to achieve a 32.5% target LF",
+      "codebase_implements": "Tiered target: 32.5% only while LF < 30%; LF+10 (cap 50%) for 30-40%; no volume target at all above 40% (G-WASH-ANOMALY)",
+      "basis": "A fixed 32.5% target produces a negative volume once measured LF exceeds it, which clamps to zero and yields contradictory advice.",
+      "resolution": "Excel model and docs show all three tiers.",
+      "severity": "material above 30% LF"
+    }
+  ]
+}

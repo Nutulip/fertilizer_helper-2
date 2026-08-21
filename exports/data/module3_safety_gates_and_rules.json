@@ -1,0 +1,437 @@
+{
+  "meta": {
+    "module": "M8 / M4 diagnostics",
+    "title_bilingual": "【理化诊断与刚性熔断 (Diagnostics & Safety Gates)】",
+    "source": "Van der Lugt, G. et al. (2020) Nutrient Solutions for Greenhouse Crops, Version 4, ISBN 9789464021844. Eurofins Agro / Nouryon / SQM / Yara."
+  },
+  "charge_balance": {
+    "cations_mmol_c_per_l": "[NH4+] + [K+] + [Na+] + 2[Ca2+] + 2[Mg2+] + [H+]",
+    "anions_mmol_c_per_l": "[NO3-] + [Cl-] + 2[SO4 2-] + [HCO3-] + [H2PO4-]",
+    "h_plus_note": "H+ from acid dosing MUST be included. Table 3 step 7 (p.23) balances only with it: 21.2 vs 21.25 meq/L.",
+    "ec_estimate": "EC = (Eq_cations + Eq_anions) / 20",
+    "acceptable_difference_pct": 10.0,
+    "source": "Formulas 1-4, p.21"
+  },
+  "reference_ec_normalisation": {
+    "ec_reference": "EC_target_values - 0.30",
+    "ec_nutrients": "EC_analysed - 0.10 * Na_analysed(mmol/L)",
+    "conversion": "Nutrient_ref = Nutrient_analysed * EC_ref / EC_nutrients",
+    "never_normalised": [
+      "Na",
+      "HCO3"
+    ],
+    "source": "p.21-22"
+  },
+  "correction_ladder": {
+    "level_1": {
+      "deviation_pct": 25,
+      "adjustment_pct": [
+        10,
+        15
+      ]
+    },
+    "level_2": {
+      "deviation_pct": 50,
+      "adjustment_pct": [
+        15,
+        25
+      ],
+      "cumulative_pct": [
+        25,
+        40
+      ]
+    },
+    "micronutrient_steps_pct": [
+      50,
+      25,
+      0,
+      -25,
+      -50
+    ],
+    "source": "p.22"
+  },
+  "emergency_thresholds": {
+    "ph_min": 5.2,
+    "ec_max_ms_cm": 4.5,
+    "behaviour": "BLOCKING - recipe suppressed, hardcoded flush instructions returned, cognitive layer never invoked"
+  },
+  "antagonism_patterns": [
+    {
+      "code": "K_SUPPRESSES_CA_MG",
+      "pattern_en": "K blocks Ca and Mg uptake",
+      "pattern_zh": "钾抑制钙镁吸收"
+    },
+    {
+      "code": "NA_DISPLACES_CATIONS",
+      "pattern_en": "Na displaces nutrient cations",
+      "pattern_zh": "钠置换养分阳离子"
+    },
+    {
+      "code": "CA_SUPPRESSES_MG",
+      "pattern_en": "Ca blocks Mg uptake",
+      "pattern_zh": "钙抑制镁吸收"
+    },
+    {
+      "code": "NH4_SUPPRESSES_CA_K",
+      "pattern_en": "Ammonium blocks Ca and K uptake",
+      "pattern_zh": "铵抑制钙钾吸收"
+    },
+    {
+      "code": "METALS_DISPLACE_FE",
+      "pattern_en": "Mn, Zn and Cu displace Fe from the chelate",
+      "pattern_zh": "锰锌铜从螯合物上置换铁"
+    },
+    {
+      "code": "HIGH_PH_LIMITS_P_MICRO",
+      "pattern_en": "High pH limits P and micronutrient uptake",
+      "pattern_zh": "高 pH 限制磷与微量元素吸收"
+    }
+  ],
+  "gate_registry": [
+    {
+      "gate_id": "G-MELTDOWN",
+      "severity": "BLOCKING",
+      "module": "M8",
+      "condition": "pH < 5.2 or EC > 4.5 mS/cm",
+      "action": "Emergency flush; recipe output suppressed; LLM layer bypassed",
+      "provenance": "SRC:PRACTICE thresholds"
+    },
+    {
+      "gate_id": "G-PRECIP-RISK",
+      "severity": "BLOCKING",
+      "module": "M6",
+      "condition": "Ca together with SO4 or PO4 in one tank",
+      "action": "Tank bill refused outright - CaSO4 / Ca3(PO4)2 precipitation",
+      "provenance": "SRC:WUR p.31"
+    },
+    {
+      "gate_id": "G-ACID-INFEASIBLE",
+      "severity": "CRITICAL",
+      "module": "M1",
+      "condition": "H+ demand exceeds NO3+P headroom",
+      "action": "Dilute water, or shift pH control to ammonium",
+      "provenance": "SRC:WUR p.13"
+    },
+    {
+      "gate_id": "G-NA-EXCEED",
+      "severity": "CRITICAL",
+      "module": "M2",
+      "condition": "Root-zone Na above crop ceiling",
+      "action": "Forced discharge volume issued",
+      "provenance": "SRC:WUR Table 2 p.12"
+    },
+    {
+      "gate_id": "G-NA-UNREACHABLE",
+      "severity": "CRITICAL",
+      "module": "M2",
+      "condition": "Base water Na >= flush target",
+      "action": "Flushing cannot help; alternative water source required",
+      "provenance": "SRC:DERIVED"
+    },
+    {
+      "gate_id": "G-NA-APPROACH",
+      "severity": "WARNING",
+      "module": "M2",
+      "condition": "Na >= 80% of ceiling",
+      "action": "Increase monitoring, plan a discharge window",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-WASH-TRIGGER",
+      "severity": "CRITICAL",
+      "module": "M4",
+      "condition": "Drain-dripper EC gap >= 2.0 mS/cm",
+      "action": "Raise leaching fraction; extra irrigation volume issued",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-WASH-ANOMALY",
+      "severity": "CRITICAL",
+      "module": "M4",
+      "condition": "EC gap >= 2.0 while LF >= 40%",
+      "action": "DO NOT add volume; investigate channeling / EC calibration",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-NH4-CEILING",
+      "severity": "CRITICAL",
+      "module": "M5",
+      "condition": "NH4 > 1.5 mmol/L in the dosed recipe",
+      "action": "Reduce ammonium; pH will drop too far",
+      "provenance": "SRC:WUR p.15"
+    },
+    {
+      "gate_id": "G-WATER-RECIRC",
+      "severity": "CRITICAL",
+      "module": "M1",
+      "condition": "Quality level >= 2 with recirculation",
+      "action": "Level 2 water unsuitable when recirculating",
+      "provenance": "SRC:WUR p.11"
+    },
+    {
+      "gate_id": "G-WATER-SALT-SENSITIVE",
+      "severity": "CRITICAL",
+      "module": "M1",
+      "condition": "Level 3 water, Na ceiling <= 4",
+      "action": "Not for salt-sensitive crops",
+      "provenance": "SRC:WUR p.11"
+    },
+    {
+      "gate_id": "G-WATER-UNCLASSIFIED",
+      "severity": "CRITICAL",
+      "module": "M1",
+      "condition": "Beyond Table 1 level 3",
+      "action": "Reverse osmosis or alternative source",
+      "provenance": "SRC:WUR p.11"
+    },
+    {
+      "gate_id": "G-FE-DRIP",
+      "severity": "CRITICAL",
+      "module": "M1",
+      "condition": "Base-water Fe > 0 on drip irrigation",
+      "action": "Aerate and filter before the fertigation unit",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-TANK-A-ACID",
+      "severity": "CRITICAL",
+      "module": "M6",
+      "condition": "Tank A acid above cap with chelates",
+      "action": "Chelates break down below pH 3.5",
+      "provenance": "SRC:WUR p.31"
+    },
+    {
+      "gate_id": "G-ION-IMBALANCE",
+      "severity": "WARNING",
+      "module": "M7",
+      "condition": "Cation/anion difference > 10%",
+      "action": "Counter-ion adjustment needed before filling tanks",
+      "provenance": "SRC:WUR p.21"
+    },
+    {
+      "gate_id": "G-ALLOCATION-RESIDUAL",
+      "severity": "WARNING",
+      "module": "M7",
+      "condition": "Allocation cannot hit all targets",
+      "action": "Usually nitrate over-supply from acid + calcium nitrate",
+      "provenance": "SRC:DERIVED"
+    },
+    {
+      "gate_id": "G-WATER-EXCESS",
+      "severity": "WARNING",
+      "module": "M7",
+      "condition": "Base water above recipe target for an ion",
+      "action": "Cannot be un-supplied; dilute or accept",
+      "provenance": "SRC:DERIVED"
+    },
+    {
+      "gate_id": "G-LF-DEFICIT",
+      "severity": "WARNING",
+      "module": "M4",
+      "condition": "Leaching fraction < 10%",
+      "action": "Under-irrigation; salt accumulation risk",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-LF-EXCESS",
+      "severity": "WARNING",
+      "module": "M4",
+      "condition": "Leaching fraction > 40%",
+      "action": "Water and nutrient waste; check emitter uniformity",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-NH4-SHARE",
+      "severity": "WARNING",
+      "module": "M5",
+      "condition": "NH4 > 15% of total N",
+      "action": "Hydroponic proportion should stay 5-15%",
+      "provenance": "SRC:WUR p.15"
+    },
+    {
+      "gate_id": "G-CHELATE-DISINFECT",
+      "severity": "WARNING",
+      "module": "M6",
+      "condition": "UV / ozone / H2O2 disinfection",
+      "action": "Re-dose chelates AFTER disinfection",
+      "provenance": "SRC:WUR p.36"
+    },
+    {
+      "gate_id": "G-CHELATE-SODIUM",
+      "severity": "WARNING",
+      "module": "M6",
+      "condition": "Recirculating system",
+      "action": "Use Na-free K-based chelates and boric acid",
+      "provenance": "SRC:WUR p.24, p.36"
+    },
+    {
+      "gate_id": "G-FE-EXCHANGE-LOSS",
+      "severity": "WARNING",
+      "module": "M6",
+      "condition": "Mn/Zn/Cu supplied as sulphates",
+      "action": "20-50% Fe loss by chelate exchange",
+      "provenance": "SRC:WUR p.36"
+    },
+    {
+      "gate_id": "G-DRYBACK-NA",
+      "severity": "WARNING",
+      "module": "M5",
+      "condition": "Generative dry-back with Na >= 80% ceiling",
+      "action": "Dry-back concentrates sodium; intent downgraded",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-B-HIGH",
+      "severity": "WARNING",
+      "module": "M1",
+      "condition": "Base-water B > 30 umol/L",
+      "action": "Above tolerable upper limit",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-MN-HIGH",
+      "severity": "WARNING",
+      "module": "M1",
+      "condition": "Base-water Mn >= 10 umol/L",
+      "action": "Above advised level",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-FE-SPRINKLER",
+      "severity": "WARNING",
+      "module": "M1",
+      "condition": "Sprinkler Fe > 100 umol/L",
+      "action": "Leaf damage and staining",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-CO2-ESCAPE",
+      "severity": "INFO",
+      "module": "M1",
+      "condition": "Any acid dose",
+      "action": "Reaction must occur in an open mixing tank",
+      "provenance": "SRC:WUR p.13"
+    },
+    {
+      "gate_id": "G-FE-NOT-CREDITED",
+      "severity": "INFO",
+      "module": "M1",
+      "condition": "Base water contains Fe",
+      "action": "Never counted as nutrient",
+      "provenance": "SRC:WUR p.13"
+    },
+    {
+      "gate_id": "G-TANK-PH-CHECK",
+      "severity": "INFO",
+      "module": "M6",
+      "condition": "Every tank bill",
+      "action": "Tank A pH 3.5-5.0, tank B below 5.0",
+      "provenance": "SRC:WUR p.31"
+    },
+    {
+      "gate_id": "G-OO-DECLARE",
+      "severity": "INFO",
+      "module": "M6",
+      "condition": "EDDHA / HBED selected",
+      "action": "Check declared ortho-ortho content",
+      "provenance": "SRC:WUR p.36"
+    },
+    {
+      "gate_id": "G-ZN-SOURCE",
+      "severity": "INFO",
+      "module": "M1",
+      "condition": "Base water contains Zn",
+      "action": "Likely galvanised gutters",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-CU-SOURCE",
+      "severity": "INFO",
+      "module": "M1",
+      "condition": "Base water contains Cu",
+      "action": "Likely copper plumbing",
+      "provenance": "SRC:WUR p.14"
+    },
+    {
+      "gate_id": "G-DRYBACK-SUPPRESSED",
+      "severity": "INFO",
+      "module": "M5",
+      "condition": "Wash cycle active",
+      "action": "Dry-back and leaching are contradictory",
+      "provenance": "SRC:PRACTICE"
+    },
+    {
+      "gate_id": "G-DRYBACK-NA-SOIL",
+      "severity": "INFO",
+      "module": "M5",
+      "condition": "Soil substrate",
+      "action": "Dry-back does not transfer to soil",
+      "provenance": "SRC:PRACTICE"
+    }
+  ],
+  "gate_severity_order": [
+    "BLOCKING",
+    "CRITICAL",
+    "WARNING",
+    "INFO"
+  ],
+  "brief_name_mapping": [
+    {
+      "brief_name": "G-ACID-POISON",
+      "brief_condition": "pH < 5.2",
+      "implemented_as": "G-MELTDOWN",
+      "status": "IMPLEMENTED (merged)",
+      "note": "One blocking gate covers both the pH floor and the EC ceiling; the response names which limit fired."
+    },
+    {
+      "brief_name": "G-SALINITY-MELTDOWN",
+      "brief_condition": "EC > 4.5 mS/cm",
+      "implemented_as": "G-MELTDOWN",
+      "status": "IMPLEMENTED (merged)",
+      "note": "Same gate as above."
+    },
+    {
+      "brief_name": "G-K-CA-ANTAGONISM",
+      "brief_condition": "dK > +2.0 mmol/L",
+      "implemented_as": "K_SUPPRESSES_CA_MG (pattern, not a gate)",
+      "status": "NOT IMPLEMENTED AS SPECIFIED",
+      "note": "No absolute delta-K threshold exists in the codebase or in the manual. Screening fires when K exceeds 40% of cation equivalents AND Ca or Mg is below target. Adding a 2.0 mmol/L rule would need agronomic sign-off, not an export."
+    },
+    {
+      "brief_name": "G-NA-CEILING",
+      "brief_condition": "Na > crop ceiling",
+      "implemented_as": "G-NA-EXCEED (plus G-NA-APPROACH, G-NA-UNREACHABLE)",
+      "status": "IMPLEMENTED (renamed, expanded)",
+      "note": "Three-state gate: approaching 80% of ceiling, exceeded, and unreachable when base water Na is already above the target."
+    }
+  ],
+  "spec_divergences": [
+    {
+      "id": "DIV-2",
+      "topic": "Safety gate identifiers",
+      "brief_states": "G-ACID-POISON (pH<5.2), G-SALINITY-MELTDOWN (EC>4.5), G-K-CA-ANTAGONISM (dK > +2.0 mmol/L), G-NA-CEILING",
+      "codebase_implements": "G-MELTDOWN covers BOTH pH<5.2 and EC>4.5 as one blocking gate; sodium is G-NA-APPROACH / G-NA-EXCEED / G-NA-UNREACHABLE; 36 gates total",
+      "basis": "Gate identifiers are emitted by engine.py and consumed by the frontend; renaming them in an export would describe a system that does not exist.",
+      "resolution": "Exported the real gate registry plus an explicit `brief_name_mapping` for each requested name.",
+      "severity": "naming only - thresholds (pH 5.2, EC 4.5) match exactly"
+    },
+    {
+      "id": "DIV-3",
+      "topic": "K:Ca antagonism rule",
+      "brief_states": "G-K-CA-ANTAGONISM fires at dK > +2.0 mmol/L",
+      "codebase_implements": "No such rule. Antagonism screening is pattern-based: K_SUPPRESSES_CA_MG fires when K exceeds 40% of cation equivalents AND Ca or Mg is below target.",
+      "basis": "The manual gives no absolute delta-K threshold; it reports the K/Ca ratio and the cation balance chart (p.29-30).",
+      "resolution": "Exported the implemented pattern rules. The dK>2.0 rule is listed as NOT IMPLEMENTED rather than fabricated.",
+      "severity": "material - exporting an unimplemented threshold would misrepresent the system to the agronomy reviewers"
+    },
+    {
+      "id": "DIV-4",
+      "topic": "Charge balance cation formula",
+      "brief_states": "Cations = K + 2Ca + 2Mg + NH4 + Na",
+      "codebase_implements": "Cations = NH4 + K + Na + 2Ca + 2Mg + H+",
+      "basis": "H+ from acid dosing participates as a cation. Table 3 step 7 (p.23) only balances when it is included: EqCat 21.2 vs EqAn 21.25 with H+ = 0.5 mmol/L.",
+      "resolution": "Exported with the H+ term and a note.",
+      "severity": "material when acid is dosed; identical otherwise"
+    }
+  ]
+}

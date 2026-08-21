@@ -1,0 +1,143 @@
+{
+  "meta": {
+    "module": "M1",
+    "title_bilingual": "【原水水质与加酸中和 (Base Water & Acid Neutralisation)】",
+    "source": "Van der Lugt, G. et al. (2020) Nutrient Solutions for Greenhouse Crops, Version 4, ISBN 9789464021844. Eurofins Agro / Nouryon / SQM / Yara."
+  },
+  "raw_water_parameter_bounds": {
+    "quality_levels": [
+      {
+        "level": 1,
+        "ec_max": 0.5,
+        "ion_max": 1.5,
+        "na_ppm": "< 34",
+        "cl_ppm": "< 53",
+        "suitability_en": "Suitable for all crops",
+        "suitability_zh": "适用于所有作物"
+      },
+      {
+        "level": 2,
+        "ec_max": 1.0,
+        "ion_max": 2.5,
+        "na_ppm": "34 - 57",
+        "cl_ppm": "53 - 87",
+        "suitability_en": "Not suitable when recirculation is necessary",
+        "suitability_zh": "需要循环回用时不适用"
+      },
+      {
+        "level": 3,
+        "ec_max": 1.5,
+        "ion_max": 4.0,
+        "na_ppm": "57 - 92",
+        "cl_ppm": "87 - 142",
+        "suitability_en": "Not to be used for salt-sensitive crops",
+        "suitability_zh": "不可用于盐敏感作物"
+      }
+    ],
+    "ph_optimum_hydroponic": [
+      5.5,
+      6.5
+    ],
+    "ph_optimum_soil": [
+      6.0,
+      7.5
+    ],
+    "iron_limits_umol_l": {
+      "drip": 0.0,
+      "drip_with_organic_matter": 20.0,
+      "sprinkler_soft_water_max": 100.0,
+      "decorative_crop_max": 50.0,
+      "note": "Base-water Fe is NEVER credited as nutrient; it precipitates at the emitter (p.13-14)."
+    },
+    "micronutrient_screening_umol_l": {
+      "B_tolerable_upper": 30.0,
+      "Mn_max": 10.0
+    }
+  },
+  "acids": [
+    {
+      "id": "hno3_38",
+      "name_en": "Nitric acid 38%",
+      "name_zh": "硝酸 38%",
+      "density_kg_per_l": 1.24,
+      "grams_product_per_mol_h": 167.0,
+      "molarity_mol_h_per_l": 7.4251,
+      "mmol_h_per_ml": 7.4251,
+      "anion_yield_per_mol_h": {
+        "NO3": 1.0
+      },
+      "litres_per_mmol_per_l_per_m3": 0.134677
+    },
+    {
+      "id": "hno3_60",
+      "name_en": "Nitric acid 60%",
+      "name_zh": "硝酸 60%",
+      "density_kg_per_l": 1.37,
+      "grams_product_per_mol_h": 105.0,
+      "molarity_mol_h_per_l": 13.0476,
+      "mmol_h_per_ml": 13.0476,
+      "anion_yield_per_mol_h": {
+        "NO3": 1.0
+      },
+      "litres_per_mmol_per_l_per_m3": 0.076642
+    },
+    {
+      "id": "h3po4_59",
+      "name_en": "Phosphoric acid 59%",
+      "name_zh": "磷酸 59%",
+      "density_kg_per_l": 1.42,
+      "grams_product_per_mol_h": 167.0,
+      "molarity_mol_h_per_l": 8.503,
+      "mmol_h_per_ml": 8.503,
+      "anion_yield_per_mol_h": {
+        "H2PO4": 1.0
+      },
+      "litres_per_mmol_per_l_per_m3": 0.117606
+    }
+  ],
+  "hco3_safety_buffer_mmol_l": {
+    "min": 0.5,
+    "max": 0.75,
+    "default": 0.5,
+    "rationale": "Retaining 0.5-0.75 mmol/L HCO3 buffers pH to 5.5-6.0. Neutralising all of it drops irrigation pH below 5 (p.24)."
+  },
+  "neutralisation": {
+    "reaction": "Ca2+ + 2HCO3- + 2HNO3 <-> Ca2+ + 2CO2 + 2H2O + 2NO3-",
+    "h_required_formula": "H+ = max(0, HCO3_base_water - HCO3_buffer)",
+    "constraint": "Acid anions count against the recipe: nitric is capped by NO3 headroom, phosphoric by P headroom.",
+    "co2_requirement": "The reaction must occur in an OPEN system so CO2 can escape, otherwise pH will not fall."
+  },
+  "dosing_bases": {
+    "stock_tank": "kg per 1000 L at 100x = mmol/L * MW * 0.1",
+    "working_solution": "L per 1000 L at 1x = (mmol/L / 1000 * V) / molarity",
+    "identity": "stock_tank_litres == working_solution_litres * CF",
+    "warning": "Confusing the two is a 100x dosing error."
+  },
+  "nutrient_deduction_rules": {
+    "creditable_from_base_water": [
+      "Ca",
+      "Mg",
+      "S",
+      "K",
+      "NO3",
+      "NH4",
+      "P",
+      "Cl"
+    ],
+    "never_credited": [
+      "Fe"
+    ],
+    "clamping": "Credits are capped at the recipe target; base water carrying more of an ion than the target cannot be un-supplied, so the excess is reported, not negated."
+  },
+  "spec_divergences": [
+    {
+      "id": "DIV-1",
+      "topic": "Acid concentrations",
+      "brief_states": "65% HNO3, 85% H3PO4",
+      "codebase_implements": "38% HNO3 (d=1.24), 60% HNO3 (d=1.37), 59% H3PO4 (d=1.42)",
+      "basis": "WUR Table 5, p.26 lists exactly these three acid grades. Neither 65% HNO3 nor 85% H3PO4 appears in the manual.",
+      "resolution": "Exported the catalogue grades. Molarity is computed from density and mass-per-mole-of-H+, so a site using a different grade can add it to the catalogue and every downstream figure follows.",
+      "severity": "material - dosing volumes differ by roughly 1.7x between 38% and 65% nitric acid"
+    }
+  ]
+}
